@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
+# Data
+dummy_data/
+example_data/
+
+# Logs and temporary files
+*.log
+err.txt
+err_dump.txt
+imports_log.txt
+inspect_log.txt
+inspection_results.txt
+out.txt
+pip_list.log
+pip_log.txt
+qt_app.log
+stderr.txt
+stdout.txt
+test_glfw.log
+test_imgui.log
+test_output.txt
+git_check.txt
+
+# UI
+imgui.ini
+
+# Build
+build/
+dist/
+*.spec
