@@ -61,18 +61,20 @@ class ShaderProgram:
 
 class VolumeRenderer:
     def __init__(self):
-        self.texture_id = None
-        self.volume_dim = (0, 0, 0) # W, H, D
+        self.texture_ids = {} # slot -> id
+        self.tf_texture_ids = {} # slot -> id
+        self.volume_dims = {0: (0, 0, 0), 1: (0, 0, 0)} # slot -> (W, H, D)
 
-    def create_texture(self, data, width, height, depth):
+    def create_texture(self, data, width, height, depth, slot=0):
         """
         Uploads 16-bit volume data to a 3D OpenGL Texture.
         """
-        if self.texture_id:
-            gl.glDeleteTextures(1, [self.texture_id])
+        if slot in self.texture_ids:
+            gl.glDeleteTextures(1, [self.texture_ids[slot]])
 
-        self.texture_id = gl.glGenTextures(1)
-        gl.glBindTexture(gl.GL_TEXTURE_3D, self.texture_id)
+        tex_id = gl.glGenTextures(1)
+        self.texture_ids[slot] = tex_id
+        gl.glBindTexture(gl.GL_TEXTURE_3D, tex_id)
 
         # Set texture parameters
         gl.glTexParameteri(gl.GL_TEXTURE_3D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
@@ -84,10 +86,6 @@ class VolumeRenderer:
         # Pixel storage mode for unpacking (alignment)
         gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
 
-        # Internal format: GL_R16
-        # Format: GL_RED
-        # Type: GL_UNSIGNED_SHORT
-        
         gl.glTexImage3D(
             gl.GL_TEXTURE_3D,
             0,
@@ -100,29 +98,28 @@ class VolumeRenderer:
             gl.GL_UNSIGNED_SHORT,
             data
         )
-        self.volume_dim = (width, height, depth)
+        self.volume_dims[slot] = (width, height, depth)
 
-    def bind_texture(self, unit=0):
-        if self.texture_id:
+    def bind_texture(self, slot=0, unit=0):
+        if slot in self.texture_ids:
             gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
-            gl.glBindTexture(gl.GL_TEXTURE_3D, self.texture_id)
+            gl.glBindTexture(gl.GL_TEXTURE_3D, self.texture_ids[slot])
 
-    def create_tf_texture(self, data):
+    def create_tf_texture(self, data, slot=0):
         """
         Uploads (256, 4) float32 data to a 1D OpenGL Texture.
         """
-        if hasattr(self, 'tf_texture_id') and self.tf_texture_id:
-            gl.glDeleteTextures(1, [self.tf_texture_id])
+        if slot in self.tf_texture_ids:
+            gl.glDeleteTextures(1, [self.tf_texture_ids[slot]])
         
-        self.tf_texture_id = gl.glGenTextures(1)
-        gl.glBindTexture(gl.GL_TEXTURE_1D, self.tf_texture_id)
+        tex_id = gl.glGenTextures(1)
+        self.tf_texture_ids[slot] = tex_id
+        gl.glBindTexture(gl.GL_TEXTURE_1D, tex_id)
         
         gl.glTexParameteri(gl.GL_TEXTURE_1D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
         gl.glTexParameteri(gl.GL_TEXTURE_1D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
         gl.glTexParameteri(gl.GL_TEXTURE_1D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
         
-        import sys
-        import traceback
         try:
             gl.glTexImage1D(
                 gl.GL_TEXTURE_1D,
@@ -135,10 +132,9 @@ class VolumeRenderer:
                 data
             )
         except Exception as e:
-            print(f"Error in create_tf_texture: {e}")
-            traceback.print_exc()
+            print(f"Error in create_tf_texture (slot {slot}): {e}")
 
-    def bind_tf_texture(self, unit=1):
-        if hasattr(self, 'tf_texture_id') and self.tf_texture_id:
+    def bind_tf_texture(self, slot=0, unit=1):
+        if slot in self.tf_texture_ids:
             gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
-            gl.glBindTexture(gl.GL_TEXTURE_1D, self.tf_texture_id)
+            gl.glBindTexture(gl.GL_TEXTURE_1D, self.tf_texture_ids[slot])

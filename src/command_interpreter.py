@@ -70,7 +70,7 @@ class CommandInterpreter:
             return None, "No previous action to reverse."
 
         # 2. Try Simple Heuristics (Regex)
-        action = self._try_regex_parsing(text)
+        action = self._try_regex_parsing(text, raw_text)
         if action:
             # Apply modifier to the new action
             if modifier != 1.0 and 'params' in action and 'value' in action['params']:
@@ -207,7 +207,7 @@ class CommandInterpreter:
             proxy_handler = urllib.request.ProxyHandler({})
             opener = urllib.request.build_opener(proxy_handler)
             
-            with opener.open(req, timeout=5.0) as response:
+            with opener.open(req, timeout=15.0) as response:
                 result = json.loads(response.read().decode('utf-8'))
                 self.context = result.get('context')
                 response_text = result.get('response', '').strip()
@@ -248,100 +248,121 @@ class CommandInterpreter:
         except Exception as e:
             return {"error": f"Connection Error: {str(e)}"}
 
-    def _try_regex_parsing(self, text):
+    def _try_regex_parsing(self, text, raw_text):
+        # 1. Load Folder (Highest Priority to avoid path shadowing)
+        # Match everything after 'load' (and optional 'overlay') as the path
+        if 'load' in text:
+            path_match = re.search(r'load\s+(?:overlay\s+)?(.+)', raw_text, re.IGNORECASE)
+            if path_match:
+                path = path_match.group(1).strip()
+                # Remove surrounding quotes if present
+                if (path.startswith('"') and path.endswith('"')) or (path.startswith("'") and path.endswith("'")):
+                    path = path[1:-1]
+                return {'action': 'load', 'params': {'path': path}}
+
         # Extract number if present
         nums = re.findall(r"[-+]?\d*\.\d+|\d+", text)
         val_from_text = float(nums[0]) if nums else None
 
         # Zoom commands (including natural language)
-        zoom_in_phrases = ['zoom', 'closer', 'nearer', 'approach']
-        zoom_out_phrases = ['back', 'away', 'further', 'retreat']
+        zoom_in_phrases = [r'\bzoom\b', r'\bcloser\b', r'\bnearer\b', r'\bapproach\b']
+        zoom_out_phrases = [r'\bback\b', r'\baway\b', r'\bfurther\b', r'\bretreat\b']
         
-        if any(w in text for w in zoom_in_phrases) or any(w in text for w in zoom_out_phrases):
+        if any(re.search(p, text) for p in zoom_in_phrases) or any(re.search(p, text) for p in zoom_out_phrases):
             value = val_from_text if val_from_text is not None else 1.0
-            # Check for zoom out indicators
-            if any(w in text for w in zoom_out_phrases) and not any(w in text for w in zoom_in_phrases):
+            if any(re.search(p, text) for p in zoom_out_phrases) and not any(re.search(p, text) for p in zoom_in_phrases):
                 value = -abs(value)
-            elif 'out' in text:
+            elif r'\bout\b' in text: # Simple check
                 value = -abs(value)
             return {'action': 'zoom', 'params': {'value': value}}
         
         # Rotate commands
-        if any(w in text for w in ['rotate', 'turn', 'spin', 'orbit']):
-            axis = 'y' # Default
-            if 'up' in text or 'down' in text or 'vertically' in text or 'slope' in text:
+        if any(re.search(r'\b' + w + r'\b', text) for w in ['rotate', 'turn', 'spin', 'orbit']):
+            axis = 'y'
+            if any(re.search(r'\b' + w + r'\b', text) for w in ['up', 'down', 'vertically', 'slope']):
                 axis = 'x'
             
             value = val_from_text if val_from_text is not None else 10.0
-            if 'left' in text or 'up' in text: # Conventions
+            if any(re.search(r'\b' + w + r'\b', text) for w in ['left', 'up']):
                 value = -abs(value)
             
             return {'action': 'rotate', 'params': {'axis': axis, 'value': value}}
                 
         # Reset / Home commands
-        if any(w in text for w in ['reset', 'home', 'default', 'lost', 'center', 'start']):
+        if any(re.search(r'\b' + w + r'\b', text) for w in ['reset', 'home', 'default', 'lost', 'center', 'start']):
             return {'action': 'reset', 'params': {}}
         
         # Rendering mode commands
-        if any(w in text for w in ['mip', 'maximum intensity']):
+        if any(re.search(r'\b' + w + r'\b', text) for w in ['mip', 'maximum intensity']):
             return {'action': 'set_mode', 'params': {'mode': 'mip'}}
-        if 'cinematic' in text:
+        if re.search(r'\bcinematic\b', text):
             return {'action': 'set_mode', 'params': {'mode': 'cinematic'}}
-        if 'mida' in text:
+        if re.search(r'\bmida\b', text):
             return {'action': 'set_mode', 'params': {'mode': 'mida'}}
         
         # Transfer function commands
         for tf_name in ['viridis', 'plasma', 'medical', 'rainbow', 'grayscale']:
-            if tf_name in text:
+            if re.search(r'\b' + tf_name + r'\b', text):
                 return {'action': 'set_tf', 'params': {'tf': tf_name}}
         
         # Slice positioning
-        if 'slice' in text:
+        if re.search(r'\bslice\b', text):
             axis = None
-            if 'x' in text:
-                axis = 'x'
-            elif 'y' in text:
-                axis = 'y'
-            elif 'z' in text:
-                axis = 'z'
+            if re.search(r'\bx\b', text): axis = 'x'
+            elif re.search(r'\by\b', text): axis = 'y'
+            elif re.search(r'\bz\b', text): axis = 'z'
             
             if axis:
-                # Check for semantic positions
-                if 'middle' in text or 'center' in text:
+                if any(re.search(r'\b' + w + r'\b', text) for w in ['middle', 'center']):
                     return {'action': 'set_slice', 'params': {'axis': axis, 'percent': 50.0}}
-                elif 'start' in text or 'beginning' in text:
+                elif any(re.search(r'\b' + w + r'\b', text) for w in ['start', 'beginning']):
                     return {'action': 'set_slice', 'params': {'axis': axis, 'percent': 0.0}}
-                elif 'end' in text:
+                elif re.search(r'\bend\b', text):
                     return {'action': 'set_slice', 'params': {'axis': axis, 'percent': 100.0}}
                 elif val_from_text is not None:
-                    # Check if it's a percentage or absolute value
                     if '%' in text or val_from_text <= 100:
                         return {'action': 'set_slice', 'params': {'axis': axis, 'percent': val_from_text}}
                     else:
                         return {'action': 'set_slice', 'params': {'axis': axis, 'value': int(val_from_text)}}
         
         # Lighting mode
-        if 'headlamp' in text:
+        if re.search(r'\bheadlamp\b', text):
             return {'action': 'set_lighting', 'params': {'mode': 'headlamp'}}
-        if 'fixed' in text and 'light' in text:
+        if re.search(r'\bfixed\b', text) and re.search(r'\blight\b', text):
             return {'action': 'set_lighting', 'params': {'mode': 'fixed'}}
 
         # Crop / Clip
-        if any(w in text for w in ['crop', 'clip']):
+        if any(re.search(r'\b' + w + r'\b', text) for w in ['crop', 'clip']):
             axis = None
-            if 'x' in text: axis = 'x'
-            elif 'y' in text: axis = 'y'
-            elif 'z' in text: axis = 'z'
+            if re.search(r'\bx\b', text): axis = 'x'
+            elif re.search(r'\by\b', text): axis = 'y'
+            elif re.search(r'\bz\b', text): axis = 'z'
             
             if axis and len(nums) >= 2:
-                v1 = float(nums[0])
-                v2 = float(nums[1])
-                # Normalize if they look like percentages
+                v1, v2 = float(nums[0]), float(nums[1])
                 if v1 > 1.0: v1 /= 100.0
                 if v2 > 1.0: v2 /= 100.0
                 return {'action': 'crop', 'params': {'axis': axis, 'min': min(v1, v2), 'max': max(v1, v2)}}
-            elif any(w in text for w in ['half', 'middle', 'center']):
+            elif any(re.search(r'\b' + w + r'\b', text) for w in ['half', 'middle', 'center']):
                  if axis:
                      return {'action': 'crop', 'params': {'axis': axis, 'min': 0.25, 'max': 0.75}}
+
+        # Threshold commands
+        if re.search(r'\bthreshold\b', text):
+            return {'action': 'set_threshold', 'params': {'value': val_from_text if val_from_text is not None else 0.05}}
             
+        # Density / Opacity commands
+        if any(re.search(r'\b' + w + r'\b', text) for w in ['density', 'opacity']):
+            return {'action': 'set_density', 'params': {'value': val_from_text if val_from_text is not None else 50.0}}
+
+        # Overlay Alignment & Scaling
+        if re.search(r'\boffset\b', text):
+            return {'action': 'set_offset', 'params': {}}
+        if re.search(r'\bscale\b', text):
+            return {'action': 'set_scale', 'params': {}}
+        if re.search(r'\bfit\b', text):
+            return {'action': 'fit_overlay', 'params': {}}
+        if re.search(r'\bcenter\b', text):
+            return {'action': 'center_overlay', 'params': {}}
+
         return None

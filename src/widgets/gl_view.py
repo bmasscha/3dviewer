@@ -39,26 +39,53 @@ class GLViewWidget(QOpenGLWidget):
         gl.glViewport(0, 0, w, h)
 
     def paintGL(self):
-        # print(f"paintGL called for mode: {self.mode}") # Too much noise
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
         
-        if not self.core.volume_renderer.texture_id:
+        if not self.core.volume_renderer.texture_ids:
             return
 
         if not self.core.slice_shader or not self.core.ray_shader:
             return
 
-        vol_w, vol_h, vol_d = self.core.volume_renderer.volume_dim
+        vol_w, vol_h, vol_d = self.core.volume_renderer.volume_dims[0]
 
         if self.mode in ["Axial", "Coronal", "Sagittal"]:
             self.core.slice_shader.use()
-            self.core.volume_renderer.bind_texture(0)
+            # Unit 0: Primary Volume
+            self.core.volume_renderer.bind_texture(slot=0, unit=0)
             self.core.slice_shader.set_int("volumeTexture", 0)
             
-            # Bind and set transfer function
-            self.core.volume_renderer.bind_tf_texture(1)
+            # Unit 1: Primary TF
+            self.core.volume_renderer.bind_tf_texture(slot=0, unit=1)
             self.core.slice_shader.set_int("transferFunction", 1)
             
+            # Overlay Volume and TF (Units 2 and 3)
+            self.core.slice_shader.set_int("hasOverlay", 1 if self.core.has_overlay else 0)
+            if self.core.has_overlay:
+                self.core.volume_renderer.bind_texture(slot=1, unit=2)
+                self.core.slice_shader.set_int("volumeTexture2", 2)
+                self.core.volume_renderer.bind_tf_texture(slot=1, unit=3)
+                self.core.slice_shader.set_int("transferFunction2", 3)
+                
+                self.core.slice_shader.set_float("densityMultiplier2", self.core.overlay_density)
+                self.core.slice_shader.set_float("threshold2", self.core.overlay_threshold)
+                self.core.slice_shader.set_float("tfSlope2", self.core.overlay_tf_slope)
+                self.core.slice_shader.set_float("tfOffset2", self.core.overlay_tf_offset)
+            
+            # Common Alignment & Box Uniforms
+            box_size = self.core.get_box_size(slot=0)
+            self.core.slice_shader.set_vec3("boxSize", box_size.x, box_size.y, box_size.z)
+            box_size2 = self.core.get_box_size(slot=1)
+            self.core.slice_shader.set_vec3("boxSize2", box_size2.x, box_size2.y, box_size2.z)
+            self.core.slice_shader.set_vec3("overlayOffset", self.core.overlay_offset.x, self.core.overlay_offset.y, self.core.overlay_offset.z)
+            self.core.slice_shader.set_float("overlayScale", self.core.overlay_scale)
+
+            # Clipping
+            self.core.slice_shader.set_vec3("clipMin", self.core.clip_min.x, self.core.clip_min.y, self.core.clip_min.z)
+            self.core.slice_shader.set_vec3("clipMax", self.core.clip_max.x, self.core.clip_max.y, self.core.clip_max.z)
+            self.core.slice_shader.set_vec3("clipMin2", self.core.overlay_clip_min.x, self.core.overlay_clip_min.y, self.core.overlay_clip_min.z)
+            self.core.slice_shader.set_vec3("clipMax2", self.core.overlay_clip_max.x, self.core.overlay_clip_max.y, self.core.overlay_clip_max.z)
+
             if self.mode == "Axial":
                 axis = 0
                 depth = self.core.slice_indices[2] / max(1, vol_d-1)
@@ -78,14 +105,30 @@ class GLViewWidget(QOpenGLWidget):
             self.render_quad()
             
         elif self.mode == "3D":
-            # print("3D render call")
             self.core.ray_shader.use()
-            self.core.volume_renderer.bind_texture(0)
+            
+            # Unit 0: Primary Volume
+            self.core.volume_renderer.bind_texture(slot=0, unit=0)
             self.core.ray_shader.set_int("volumeTexture", 0)
             
-            self.core.volume_renderer.bind_tf_texture(1)
+            # Unit 1: Primary TF
+            self.core.volume_renderer.bind_tf_texture(slot=0, unit=1)
             self.core.ray_shader.set_int("transferFunction", 1)
             
+            # Overlay Volume and TF (Units 2 and 3)
+            self.core.ray_shader.set_int("hasOverlay", 1 if self.core.has_overlay else 0)
+            if self.core.has_overlay:
+                self.core.volume_renderer.bind_texture(slot=1, unit=2)
+                self.core.ray_shader.set_int("volumeTexture2", 2)
+                
+                self.core.volume_renderer.bind_tf_texture(slot=1, unit=3)
+                self.core.ray_shader.set_int("transferFunction2", 3)
+                
+                self.core.ray_shader.set_float("densityMultiplier2", self.core.overlay_density)
+                self.core.ray_shader.set_float("threshold2", self.core.overlay_threshold)
+                self.core.ray_shader.set_float("tfSlope2", self.core.overlay_tf_slope)
+                self.core.ray_shader.set_float("tfOffset2", self.core.overlay_tf_offset)
+
             camera = self.core.camera
             self.core.ray_shader.set_vec3("camPos", camera.position.x, camera.position.y, camera.position.z)
             
@@ -102,33 +145,36 @@ class GLViewWidget(QOpenGLWidget):
             self.core.ray_shader.set_vec2("resolution", self.width(), self.height())
             self.core.ray_shader.set_float("fov", camera.fov)
             
-            # Unified Box Size and Alignment
-            box_size = self.core.get_box_size()
+            box_size = self.core.get_box_size(slot=0)
             self.core.ray_shader.set_vec3("boxSize", box_size.x, box_size.y, box_size.z)
             
+            box_size2 = self.core.get_box_size(slot=1)
+            self.core.ray_shader.set_vec3("boxSize2", box_size2.x, box_size2.y, box_size2.z)
+            
+            self.core.ray_shader.set_vec3("overlayOffset", self.core.overlay_offset.x, self.core.overlay_offset.y, self.core.overlay_offset.z)
+            self.core.ray_shader.set_float("overlayScale", self.core.overlay_scale)
+            
             self.core.ray_shader.set_int("renderMode", self.core.rendering_mode)
+            self.core.ray_shader.set_int("renderMode2", self.core.overlay_rendering_mode)
             self.core.ray_shader.set_float("densityMultiplier", self.core.volume_density)
             self.core.ray_shader.set_float("threshold", self.core.volume_threshold)
             self.core.ray_shader.set_float("lightIntensity", self.core.light_intensity)
             self.core.ray_shader.set_float("ambientLight", self.core.ambient_light)
             self.core.ray_shader.set_float("diffuseLight", self.core.diffuse_light)
             
-            # Clipping
             self.core.ray_shader.set_vec3("clipMin", self.core.clip_min.x, self.core.clip_min.y, self.core.clip_min.z)
             self.core.ray_shader.set_vec3("clipMax", self.core.clip_max.x, self.core.clip_max.y, self.core.clip_max.z)
             
+            self.core.ray_shader.set_vec3("clipMin2", self.core.overlay_clip_min.x, self.core.overlay_clip_min.y, self.core.overlay_clip_min.z)
+            self.core.ray_shader.set_vec3("clipMax2", self.core.overlay_clip_max.x, self.core.overlay_clip_max.y, self.core.overlay_clip_max.z)
             
-            # Lighting Mode
             if self.core.lighting_mode == 0: # Fixed
                 lx, ly, lz = 0.5, 1.0, 0.5
             else: # Headlamp
-                # Fixed: Use position - target to point TOWARDS the camera (direction to light)
                 to_cam = glm.normalize(camera.position - camera.target)
                 lx, ly, lz = to_cam.x, to_cam.y, to_cam.z
             self.core.ray_shader.set_vec3("lightDir", lx, ly, lz)
             
-            # Rendering Quality
-            # Default STEP_SIZE was 0.003, MAX_STEPS 512
             quality = self.core.sampling_rate
             if self.is_interacting:
                 quality *= 0.25 # Reduce quality by 4x during interaction

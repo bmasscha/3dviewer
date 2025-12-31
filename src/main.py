@@ -254,10 +254,10 @@ def main():
                 gl.glClearColor(0.0, 0.0, 0.0, 1.0)
                 gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
                 
-                if volume_renderer.texture_id:
+                if volume_renderer.texture_ids:
                     volume_renderer.bind_texture(0)
                     # Correct unpacking based on renderer: volume_dim = (Width, Height, Depth)
-                    vol_w, vol_h, vol_d = volume_renderer.volume_dim
+                    vol_w, vol_h, vol_d = volume_renderer.volume_dims[0]
                     
                     # Split screen into 4 quadrants
                     # Top-Left: Axial (Z) - XY Plane

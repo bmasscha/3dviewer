@@ -125,44 +125,34 @@ class MainWindow(QMainWindow):
         vbox.addWidget(self.combo_render_mode)
         
         # 3D Density
-        vbox.addWidget(QLabel("3D Density Multiplier"))
-        self.slider_vol_density = QSlider(Qt.Orientation.Horizontal)
-        self.slider_vol_density.setRange(1, 2000)
-        self.slider_vol_density.setValue(int(self.core.volume_density * 10))
-        self.slider_vol_density.valueChanged.connect(self.on_vol_density_changed)
-        vbox.addWidget(self.slider_vol_density)
+        self.slider_vol_density, self.label_vol_density = self.create_labeled_slider(
+            vbox, "3D Density Multiplier", 1, 2000, int(self.core.volume_density * 10), 
+            self.on_vol_density_changed, transform=lambda v: f"{v/10.0:.1f}"
+        )
         
         # Light Intensity
-        vbox.addWidget(QLabel("Light Intensity"))
-        self.slider_light = QSlider(Qt.Orientation.Horizontal)
-        self.slider_light.setRange(1, 1000) # Increased range for flexibility
-        self.slider_light.setValue(int(self.core.light_intensity * 100))
-        self.slider_light.valueChanged.connect(self.on_light_intensity_changed)
-        vbox.addWidget(self.slider_light)
+        self.slider_light, self.label_light = self.create_labeled_slider(
+            vbox, "Light Intensity", 1, 1000, int(self.core.light_intensity * 100), 
+            self.on_light_intensity_changed, transform=lambda v: f"{v/100.0:.2f}"
+        )
         
         # Ambient Light
-        vbox.addWidget(QLabel("Ambient Light"))
-        self.slider_ambient = QSlider(Qt.Orientation.Horizontal)
-        self.slider_ambient.setRange(0, 100) # 0.0 to 1.0
-        self.slider_ambient.setValue(int(self.core.ambient_light * 100))
-        self.slider_ambient.valueChanged.connect(self.on_ambient_changed)
-        vbox.addWidget(self.slider_ambient)
+        self.slider_ambient, self.label_ambient = self.create_labeled_slider(
+            vbox, "Ambient Light", 0, 100, int(self.core.ambient_light * 100), 
+            self.on_ambient_changed, transform=lambda v: f"{v/100.0:.2f}"
+        )
         
         # Diffuse Light
-        vbox.addWidget(QLabel("Diffuse Light"))
-        self.slider_diffuse = QSlider(Qt.Orientation.Horizontal)
-        self.slider_diffuse.setRange(0, 200) # 0.0 to 2.0
-        self.slider_diffuse.setValue(int(self.core.diffuse_light * 100))
-        self.slider_diffuse.valueChanged.connect(self.on_diffuse_changed)
-        vbox.addWidget(self.slider_diffuse)
+        self.slider_diffuse, self.label_diffuse = self.create_labeled_slider(
+            vbox, "Diffuse Light", 0, 200, int(self.core.diffuse_light * 100), 
+            self.on_diffuse_changed, transform=lambda v: f"{v/100.0:.2f}"
+        )
         
         # Sampling Quality
-        vbox.addWidget(QLabel("Sampling Quality"))
-        self.slider_quality = QSlider(Qt.Orientation.Horizontal)
-        self.slider_quality.setRange(5, 40) # 0.5 to 4.0
-        self.slider_quality.setValue(int(self.core.sampling_rate * 10))
-        self.slider_quality.valueChanged.connect(self.on_quality_changed)
-        vbox.addWidget(self.slider_quality)
+        self.slider_quality, self.label_quality = self.create_labeled_slider(
+            vbox, "Sampling Quality", 5, 40, int(self.core.sampling_rate * 10), 
+            self.on_quality_changed, transform=lambda v: f"{v/10.0:.1f}"
+        )
         
         # Lighting Mode
         vbox.addWidget(QLabel("Lighting Mode"))
@@ -173,22 +163,19 @@ class MainWindow(QMainWindow):
         vbox.addWidget(self.combo_light_mode)
         
         # TF Slope
-        vbox.addWidget(QLabel("TF Slope"))
-        self.slider_tf_slope = QSlider(Qt.Orientation.Horizontal)
-        self.slider_tf_slope.setRange(1, 100) # 0.1 to 10.0
-        self.slider_tf_slope.setValue(int(self.core.tf_slope * 10))
-        self.slider_tf_slope.valueChanged.connect(self.on_tf_slope_changed)
-        vbox.addWidget(self.slider_tf_slope)
+        self.slider_tf_slope, self.label_tf_slope = self.create_labeled_slider(
+            vbox, "TF Slope", 1, 100, int(self.core.tf_slope * 10), 
+            self.on_tf_slope_changed, transform=lambda v: f"{v/10.0:.1f}"
+        )
         
         # TF Offset
-        vbox.addWidget(QLabel("TF Offset"))
-        self.slider_tf_offset = QSlider(Qt.Orientation.Horizontal)
-        self.slider_tf_offset.setRange(-200, 200) # -2.0 to 2.0
-        self.slider_tf_offset.setValue(int(self.core.tf_offset * 100))
-        self.slider_tf_offset.valueChanged.connect(self.on_tf_offset_changed)
-        vbox.addWidget(self.slider_tf_offset)
+        self.slider_tf_offset, self.label_tf_offset = self.create_labeled_slider(
+            vbox, "TF Offset", -200, 200, int(self.core.tf_offset * 100), 
+            self.on_tf_offset_changed, transform=lambda v: f"{v/100.0:.2f}"
+        )
         
         layout.addWidget(container)
+
 
     def on_render_mode_changed(self, index):
         self.core.set_rendering_mode(index)
@@ -262,27 +249,25 @@ class MainWindow(QMainWindow):
         vbox.addWidget(title)
         
         # Density
-        vbox.addWidget(QLabel("Slice Density"))
-        self.slider_density = QSlider(Qt.Orientation.Horizontal)
-        self.slider_density.setRange(1, 1000)
-        self.slider_density.setValue(int(self.core.slice_density * 10))
-        self.slider_density.valueChanged.connect(self.on_density_changed)
-        vbox.addWidget(self.slider_density)
+        self.slider_density, self.label_density = self.create_labeled_slider(
+            vbox, "Slice Density", 1, 50, int(self.core.slice_density * 10), 
+            self.on_density_changed, transform=lambda v: f"{v/10.0:.1f}"
+        )
+
         
         # Threshold
-        vbox.addWidget(QLabel("Slice Threshold"))
-        self.slider_threshold = QSlider(Qt.Orientation.Horizontal)
-        self.slider_threshold.setRange(0, 100)
-        self.slider_threshold.setValue(int(self.core.slice_threshold * 100))
-        self.slider_threshold.valueChanged.connect(self.on_threshold_changed)
-        vbox.addWidget(self.slider_threshold)
+        self.slider_threshold, self.label_threshold = self.create_labeled_slider(
+            vbox, "Slice Threshold", 0, 100, int(self.core.slice_threshold * 100), 
+            self.on_threshold_changed, transform=lambda v: f"{v/100.0:.2f}"
+        )
         
         # Slices
-        self.slider_x = self.create_named_slider(vbox, "Slice X", 0, self.on_slice_x_changed)
-        self.slider_y = self.create_named_slider(vbox, "Slice Y", 1, self.on_slice_y_changed)
-        self.slider_z = self.create_named_slider(vbox, "Slice Z", 2, self.on_slice_z_changed)
+        self.slider_x, self.label_x = self.create_named_slider(vbox, "Slice X", 0, self.on_slice_x_changed)
+        self.slider_y, self.label_y = self.create_named_slider(vbox, "Slice Y", 1, self.on_slice_y_changed)
+        self.slider_z, self.label_z = self.create_named_slider(vbox, "Slice Z", 2, self.on_slice_z_changed)
         
         layout.addWidget(container)
+
 
     def create_clipping_panel(self, layout):
         container = QFrame()
@@ -294,12 +279,12 @@ class MainWindow(QMainWindow):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         vbox.addWidget(title)
         
-        self.slider_clip_min_x = self.create_percent_slider(vbox, "Min X", 0, self.on_clip_changed)
-        self.slider_clip_max_x = self.create_percent_slider(vbox, "Max X", 100, self.on_clip_changed)
-        self.slider_clip_min_y = self.create_percent_slider(vbox, "Min Y", 0, self.on_clip_changed)
-        self.slider_clip_max_y = self.create_percent_slider(vbox, "Max Y", 100, self.on_clip_changed)
-        self.slider_clip_min_z = self.create_percent_slider(vbox, "Min Z", 0, self.on_clip_changed)
-        self.slider_clip_max_z = self.create_percent_slider(vbox, "Max Z", 100, self.on_clip_changed)
+        self.slider_clip_min_x, self.label_clip_min_x = self.create_percent_slider(vbox, "Min X", 0, self.on_clip_changed)
+        self.slider_clip_max_x, self.label_clip_max_x = self.create_percent_slider(vbox, "Max X", 100, self.on_clip_changed)
+        self.slider_clip_min_y, self.label_clip_min_y = self.create_percent_slider(vbox, "Min Y", 0, self.on_clip_changed)
+        self.slider_clip_max_y, self.label_clip_max_y = self.create_percent_slider(vbox, "Max Y", 100, self.on_clip_changed)
+        self.slider_clip_min_z, self.label_clip_min_z = self.create_percent_slider(vbox, "Min Z", 0, self.on_clip_changed)
+        self.slider_clip_max_z, self.label_clip_max_z = self.create_percent_slider(vbox, "Max Z", 100, self.on_clip_changed)
         
         btn_reset_clip = QPushButton("Reset Clipping")
         btn_reset_clip.clicked.connect(self.on_reset_clipping)
@@ -307,14 +292,39 @@ class MainWindow(QMainWindow):
         
         layout.addWidget(container)
 
+
     def create_percent_slider(self, layout, name, default_val, callback):
-        layout.addWidget(QLabel(name))
+        return self.create_labeled_slider(layout, name, 0, 100, default_val, callback, transform=lambda v: f"{v}%")
+
+    def create_labeled_slider(self, layout, name, min_val, max_val, initial_val, callback, transform=None):
+        header = QHBoxLayout()
+        header.addWidget(QLabel(name))
+        header.addStretch()
+        
+        val_str = str(initial_val)
+        if transform:
+            val_str = transform(initial_val)
+            
+        val_label = QLabel(val_str)
+        val_label.setStyleSheet("color: #3498DB; font-weight: bold;")
+        header.addWidget(val_label)
+        layout.addLayout(header)
+        
         slider = QSlider(Qt.Orientation.Horizontal)
-        slider.setRange(0, 100)
-        slider.setValue(default_val)
-        slider.valueChanged.connect(callback)
+        slider.setRange(min_val, max_val)
+        slider.setValue(initial_val)
+        
+        def on_val_changed(v):
+            if transform:
+                val_label.setText(transform(v))
+            else:
+                val_label.setText(str(v))
+            callback(v)
+            
+        slider.valueChanged.connect(on_val_changed)
         layout.addWidget(slider)
-        return slider
+        return slider, val_label
+
 
     def create_command_panel(self, layout):
         container = QFrame()
@@ -392,114 +402,71 @@ class MainWindow(QMainWindow):
         
         if success or (not action_dict and response_msg):
             self.cmd_input.clear()
+            self.sync_ui_to_core() # New sync method
             self.update_views()
 
+    def sync_ui_to_core(self):
+        """Syncs all UI elements to match current core state."""
+        # Update render mode
+        self.combo_render_mode.setCurrentIndex(self.core.rendering_mode)
+        
+        # Update sliders
+        self.slider_vol_density.setValue(int(self.core.volume_density * 10))
+        self.slider_quality.setValue(int(self.core.sampling_rate * 10))
+        self.slider_light.setValue(int(self.core.light_intensity * 100))
+        self.slider_ambient.setValue(int(self.core.ambient_light * 100))
+        self.slider_diffuse.setValue(int(self.core.diffuse_light * 100))
+        self.slider_tf_slope.setValue(int(self.core.tf_slope * 10))
+        self.slider_tf_offset.setValue(int(self.core.tf_offset * 100))
+        
+        # Labels are updated via valueChanged signals, but if value hasn't changed
+        # we might want to force update just in case of float precision differences in display
+        self.label_vol_density.setText(f"{self.core.volume_density:.1f}")
+        self.label_quality.setText(f"{self.core.sampling_rate:.1f}")
+        self.label_light.setText(f"{self.core.light_intensity:.2f}")
+        self.label_ambient.setText(f"{self.core.ambient_light:.2f}")
+        self.label_diffuse.setText(f"{self.core.diffuse_light:.2f}")
+        self.label_tf_slope.setText(f"{self.core.tf_slope:.1f}")
+        self.label_tf_offset.setText(f"{self.core.tf_offset:.2f}")
+
+        
+        # Update slice ranges/values
+        vol_w, vol_h, vol_d = self.core.volume_renderer.volume_dims[0]
+        if vol_w > 0:
+            for s, m, v in [(self.slider_x, vol_w, self.core.slice_indices[0]), 
+                           (self.slider_y, vol_h, self.core.slice_indices[1]), 
+                           (self.slider_z, vol_d, self.core.slice_indices[2])]:
+                s.setRange(0, m - 1)
+                s.setEnabled(True)
+                s.setValue(v)
+            self.folder_label.setText(getattr(self, 'current_folder', "Loaded via Command"))
+
+        # Sync TF selection
+        self.combo_tf.setCurrentText(self.core.current_tf_name)
+        
+        # Note: We don't have separate sliders for overlay in the side panel yet,
+        # but the core state IS updated.
+
     def apply_ai_action(self, action_dict):
-        """Executes the action on the main thread and syncs UI."""
-        if not isinstance(action_dict, dict):
+        """Executes the action via AppCore to ensure consistency, then updates UI."""
+        if not action_dict:
             return False
-        try:
-            import glm
-            action = action_dict.get('action')
-            params = action_dict.get('params', {})
             
-            if action == 'zoom':
-                val = float(params.get('value', 0))
-                self.core.camera.process_scroll(val * 5.0)
-                return True
-            elif action == 'rotate':
-                axis = params.get('axis')
-                val = float(params.get('value', 0))
-                # Scale degrees to NDC drag amount (90 deg ≈ 0.5 NDC units)
-                if axis == 'y':
-                    drag_amount = (val / 180.0)
-                    self.core.camera.rotate(0, 0, -drag_amount, 0)
-                elif axis == 'x':
-                    drag_amount = (val / 180.0)
-                    self.core.camera.rotate(0, 0, 0, -drag_amount)
-                return True
-            elif action == 'reset':
-                self.core.camera.radius = 3.0
-                self.core.camera.target = self.core.get_box_size() * 0.5
-                self.core.camera.orientation = glm.quat()
-                self.core.camera.update_camera_vectors()
-                return True
-            elif action == 'set_mode':
-                mode_map = {'mip': 0, 'volume': 1, 'cinematic': 2, 'mida': 3}
-                mode_name = params.get('mode', '').lower()
-                if mode_name in mode_map:
-                    self.core.set_rendering_mode(mode_map[mode_name])
-                    self.combo_render_mode.setCurrentIndex(mode_map[mode_name])
-                    return True
-            elif action == 'set_tf':
-                tf_name = params.get('tf', '').lower()
-                if tf_name in self.core.tf_names:
-                    self.core.current_tf_name = tf_name
-                    self.combo_tf.setCurrentText(tf_name)
-                    return True
-            elif action == 'set_slice':
-                axis = params.get('axis', '').lower()
-                axis_map = {'x': 0, 'y': 1, 'z': 2}
-                if axis in axis_map:
-                    axis_idx = axis_map[axis]
-                    vol_dims = self.core.volume_renderer.volume_dim
-                    
-                    if 'percent' in params:
-                        percent = float(params['percent'])
-                        value = int((percent / 100.0) * (vol_dims[axis_idx] - 1))
-                    else:
-                        value = int(params.get('value', 0))
-                    
-                    value = max(0, min(value, vol_dims[axis_idx] - 1))
-                    self.core.slice_indices[axis_idx] = value
-                    
-                    # Update UI slider
-                    sliders = [self.slider_x, self.slider_y, self.slider_z]
-                    sliders[axis_idx].setValue(value)
-                    return True
-            elif action == 'set_lighting':
-                mode_name = params.get('mode', '').lower()
-                mode_map = {'fixed': 0, 'headlamp': 1}
-                if mode_name in mode_map:
-                    self.core.lighting_mode = mode_map[mode_name]
-                    self.combo_lighting.setCurrentIndex(mode_map[mode_name])
-                    return True
-            elif action == 'adjust_quality':
-                value = float(params.get('value', 1.0))
-                self.core.sampling_rate = max(0.1, min(value, 5.0))
-                self.slider_quality.setValue(int(value * 10))
-                return True
-            elif action == 'crop':
-                axis = params.get('axis', 'x').lower()
-                c_min = float(params.get('min', 0.0))
-                c_max = float(params.get('max', 1.0))
-                
-                if axis == 'x':
-                    self.slider_clip_min_x.setValue(int(c_min * 100))
-                    self.slider_clip_max_x.setValue(int(c_max * 100))
-                elif axis == 'y':
-                    self.slider_clip_min_y.setValue(int(c_min * 100))
-                    self.slider_clip_max_y.setValue(int(c_max * 100))
-                elif axis == 'z':
-                    self.slider_clip_min_z.setValue(int(c_min * 100))
-                    self.slider_clip_max_z.setValue(int(c_max * 100))
-                return True
-        except Exception as e:
-            print(f"Error applying AI action: {e}")
-        return False
+        # Instead of manual parsing, use the unified logic in AppCore
+        # We need the original text for 'overlay' detection if we rely on it there,
+        # but since we have the action_dict, we can also pass it to a new core method if needed.
+        # For now, AppCore.execute_command_text(text) is the safest way to keep logic in one place.
+        success, message = self.core.execute_command_text(self.worker.text)
+        if message:
+            print(f"AI Action Response: {message}")
+        return success
 
     def create_named_slider(self, layout, name, axis_idx, callback):
-        layout.addWidget(QLabel(name))
-        slider = QSlider(Qt.Orientation.Horizontal)
-        slider.setRange(0, 100)
-        slider.setEnabled(False) # Enable only after load
-        slider.valueChanged.connect(callback)
-        # Add a value label
-        val_label = QLabel("0")
-        slider.valueChanged.connect(lambda v: val_label.setText(str(v)))
-        layout.addWidget(slider)
-        layout.addWidget(val_label)
-        return slider
+        slider, label = self.create_labeled_slider(layout, name, 0, 100, 0, callback)
+        slider.setEnabled(False)
+        return slider, label
+
+
 
     def create_tf_panel(self, layout):
         container = QFrame()
@@ -537,7 +504,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'current_folder'):
             if self.core.load_dataset(self.current_folder):
                 # Update slider ranges
-                vol_w, vol_h, vol_d = self.core.volume_renderer.volume_dim
+                vol_w, vol_h, vol_d = self.core.volume_renderer.volume_dims[0]
                 for s, m in [(self.slider_x, vol_w), (self.slider_y, vol_h), (self.slider_z, vol_d)]:
                     s.setRange(0, m - 1)
                     s.setEnabled(True)

@@ -4,7 +4,11 @@ out vec4 FragColor;
 in vec2 TexCoord;
 
 uniform sampler3D volumeTexture;
+uniform sampler3D volumeTexture2;
 uniform sampler1D transferFunction;
+uniform sampler1D transferFunction2;
+uniform int hasOverlay;
+
 uniform vec3 camPos;
 uniform vec3 camDir; // Front_vector
 uniform vec3 camUp;
@@ -13,22 +17,34 @@ uniform vec3 camRight;
 uniform vec2 resolution;
 uniform float fov;
 uniform vec3 boxSize;
+uniform vec3 boxSize2;
 
-uniform int renderMode; // 0: MIP, 1: Standard, 2: Cinematic
+uniform vec3 overlayOffset;
+uniform float overlayScale;
+
+uniform int renderMode; // Primary: 0: MIP, 1: Std, 2: Cin, 3: MIDA
+uniform int renderMode2; // Overlay: 0: MIP, 1: Std, 2: Cin, 3: MIDA
 uniform float densityMultiplier;
 uniform float threshold;
+uniform float densityMultiplier2;
+uniform float threshold2;
+
 uniform float lightIntensity;
 uniform float stepSize;
 uniform int maxSteps;
 uniform vec3 lightDir;
 uniform float tfSlope;
 uniform float tfOffset;
+uniform float tfSlope2;
+uniform float tfOffset2;
 
 uniform float ambientLight;
 uniform float diffuseLight;
 
 uniform vec3 clipMin;
 uniform vec3 clipMax;
+uniform vec3 clipMin2;
+uniform vec3 clipMax2;
 
 
 #define SHADING_INTENSITY 0.8
@@ -39,11 +55,11 @@ float rand(vec2 co) {
 }
 
 // Estimate gradient for lighting
-vec3 calculateGradient(vec3 p) {
+vec3 calculateGradient(sampler3D tex, vec3 p, vec3 bSize) {
     float delta = 0.01;
-    float x = texture(volumeTexture, (p + vec3(delta, 0, 0)) / boxSize).r - texture(volumeTexture, (p - vec3(delta, 0, 0)) / boxSize).r;
-    float y = texture(volumeTexture, (p + vec3(0, delta, 0)) / boxSize).r - texture(volumeTexture, (p - vec3(0, delta, 0)) / boxSize).r;
-    float z = texture(volumeTexture, (p + vec3(0, 0, delta)) / boxSize).r - texture(volumeTexture, (p - vec3(0, 0, delta)) / boxSize).r;
+    float x = texture(tex, (p + vec3(delta, 0, 0)) / bSize).r - texture(tex, (p - vec3(delta, 0, 0)) / bSize).r;
+    float y = texture(tex, (p + vec3(0, delta, 0)) / bSize).r - texture(tex, (p - vec3(0, delta, 0)) / bSize).r;
+    float z = texture(tex, (p + vec3(0, 0, delta)) / bSize).r - texture(tex, (p - vec3(0, 0, delta)) / bSize).r;
     vec3 g = vec3(x, y, z);
     float l = length(g);
     if (l < 0.0001) return vec3(0.0);
@@ -58,8 +74,10 @@ struct RayHit {
 
 // Simple Ray-Box Intersection with Normal
 RayHit intersectBox(vec3 orig, vec3 dir) {
-    vec3 boxMin = max(vec3(0.0), clipMin * boxSize);
-    vec3 boxMax = min(boxSize, clipMax * boxSize); 
+    // Intersect with the full box bounds [0, boxSize]
+    // The specific clipping for each volume happens inside the loop.
+    vec3 boxMin = vec3(0.0);
+    vec3 boxMax = boxSize; 
     vec3 invDir = 1.0 / dir;
     vec3 tmin = (boxMin - orig) * invDir;
     vec3 tmax = (boxMax - orig) * invDir;
@@ -76,6 +94,12 @@ RayHit intersectBox(vec3 orig, vec3 dir) {
     }
     
     return RayHit(tNear, tFar, normal);
+}
+
+// Helper to check if a point is within a clip box
+bool isInside(vec3 p, vec3 cMin, vec3 cMax, vec3 bSize) {
+    vec3 localP = p / bSize;
+    return all(greaterThanEqual(localP, cMin - 0.001)) && all(lessThanEqual(localP, cMax + 0.001));
 }
 
 
@@ -97,18 +121,16 @@ void main()
     float tEnd = hit.tFar;
     vec3 hitNormal = hit.normal;
     
-    // Deterministic dithering instead of random jitter to avoid salt-and-pepper noise
-    // Use a simple 4x4 Bayer matrix pattern
     vec2 pixelPos = TexCoord * resolution;
-    int x = int(mod(pixelPos.x, 4.0));
-    int y = int(mod(pixelPos.y, 4.0));
+    int x_bayer = int(mod(pixelPos.x, 4.0));
+    int y_bayer = int(mod(pixelPos.y, 4.0));
     float bayerMatrix[16] = float[16](
         0.0/16.0,  8.0/16.0,  2.0/16.0, 10.0/16.0,
         12.0/16.0,  4.0/16.0, 14.0/16.0,  6.0/16.0,
         3.0/16.0, 11.0/16.0,  1.0/16.0,  9.0/16.0,
         15.0/16.0,  7.0/16.0, 13.0/16.0,  5.0/16.0
     );
-    float dither = bayerMatrix[y * 4 + x];
+    float dither = bayerMatrix[y_bayer * 4 + x_bayer];
     float jitter = dither * stepSize;
     
     float dist = tStart + jitter;
@@ -117,154 +139,111 @@ void main()
     vec4 accumulatedColor = vec4(0.0);
     vec3 L = normalize(lightDir);
     
-    // Track if we're very close to the entry point (clipping boundary)
-    bool nearClipBoundary = (hit.tNear > 0.001);
-    float distanceFromEntry = 0.0;
+    float maxVal1 = 0.0;
+    float maxVal2 = 0.0;
     
-    if (renderMode == 0) { // MIP
-        float maxVal = 0.0;
-        for(int i = 0; i < maxSteps; i++) {
-            if (dist >= tEnd) break;
-            float val = texture(volumeTexture, pos / boxSize).r;
-            float tf_coord = clamp(val * tfSlope + tfOffset, 0.0, 1.0);
-            if (tf_coord > maxVal) maxVal = tf_coord;
-            pos += rayDir * stepSize;
-            dist += stepSize;
-        }
-        if (maxVal > threshold) {
-            accumulatedColor = texture(transferFunction, maxVal);
-        } else {
-            discard;
-        }
-    } 
-    else if (renderMode == 1 || renderMode == 2) { // Standard or Cinematic
-        for(int i = 0; i < maxSteps; i++) {
-            if (dist >= tEnd || accumulatedColor.a >= 0.99) break;
-            
-            float val = texture(volumeTexture, pos / boxSize).r;
-            if (val > threshold) {
-                float tf_coord = clamp(val * tfSlope + tfOffset, 0.0, 1.0);
-                vec4 src = texture(transferFunction, tf_coord);
-                
-                // Better Alpha scaling: allow it to reach higher values per step if density is high
-                float alpha = src.a * densityMultiplier * stepSize;
-                alpha = 1.0 - exp(-alpha * 20.0); // Use exponential extinction for smoother and more solid look
-                alpha = clamp(alpha, 0.0, 1.0);
-                
-                if (alpha > 0.001) {
-                        vec3 normal;
-                        
-                        // Use gradient-based normal for lighting
-                        if (nearClipBoundary && distanceFromEntry < stepSize * 2.5) {
-                            // At clipping boundary, use the geometric normal
-                            normal = hitNormal;
-                        } else {
-                            normal = -calculateGradient(pos);
-                            // Fallback to geometric normal if gradient is too weak
-                            if (length(normal) < 0.1) {
-                                normal = hitNormal;
-                            }
-                        }
-                        
-                        float diff = max(dot(normal, L), 0.0); // Strict Lambertian term (removed 0.15 floor)
-                        
-                        vec3 finalColor;
+    // Unified Loop handles all modes and independent clipping
+    for(int i = 0; i < maxSteps; i++) {
+        if (dist >= tEnd || accumulatedColor.a >= 0.99) break;
+        
+        vec4 stepColor1 = vec4(0.0);
+        vec4 stepColor2 = vec4(0.0);
+
+        // --- Volume 1 Processing (Primary) ---
+        if (isInside(pos, clipMin, clipMax, boxSize)) {
+            float val1 = texture(volumeTexture, pos / boxSize).r;
+            if (renderMode == 0) { // MIP
+                float tfc1 = clamp(val1 * tfSlope + tfOffset, 0.0, 1.0);
+                if (tfc1 > maxVal1) maxVal1 = tfc1;
+            } else { // VR / MIDA
+                if (val1 > threshold) {
+                    float tfc1 = clamp(val1 * tfSlope + tfOffset, 0.0, 1.0);
+                    vec4 src1 = texture(transferFunction, tfc1);
+                    float a1 = 0.0;
                     
-                    if (renderMode == 2) { // Cinematic
-                        // Basic Blinn-Phong Specular
-                        vec3 viewDir = -rayDir;
-                        vec3 halfDir = normalize(L + viewDir);
-                        float spec = pow(max(dot(normal, halfDir), 0.0), 32.0);
-                        vec3 specularPart = vec3(0.6) * spec * src.a * lightIntensity;
-                        
-                        // Enhanced Volumetric Shadows
-                        float shadow = 1.0;
-                        float shadowStep = 0.015; // Fixed step size to ensure consistent reach regardless of quality
-                        vec3 shadowPos = pos + normal * 0.01; // Offset to avoid self-shadowing
-                        
-                        for(int j=0; j<24; j++) { // Increased steps slightly for better reach (24 * 0.015 = 0.36 units)
-                            shadowPos += L * shadowStep;
-                            
-                            // Check if we exited the volume or clipping box
-                            vec3 cMin = max(vec3(0.0), clipMin * boxSize);
-                            vec3 cMax = min(boxSize, clipMax * boxSize);
-                            if (any(lessThan(shadowPos, cMin)) || any(greaterThan(shadowPos, cMax))) break;
-                            
-                            float sVal = texture(volumeTexture, shadowPos / boxSize).r;
-                            if (sVal > threshold) {
-                                float s_tf_coord = clamp(sVal * tfSlope + tfOffset, 0.0, 1.0);
-                                vec4 sSrc = texture(transferFunction, s_tf_coord);
-                                
-                                // Volumetric extinction based on opacity
-                                // We use a slightly different multiplier for shadows to control "hardness"
-                                float shadowOpacity = sSrc.a * densityMultiplier * shadowStep * 15.0;
-                                shadow *= exp(-shadowOpacity);
-                                
-                                if (shadow < 0.02) {
-                                    shadow = 0.0;
-                                    break;
-                                }
-                            }
+                    if (renderMode == 3) { // MIDA
+                        float delta = max(0.0, tfc1 - maxVal1);
+                        if (delta > 0.001) {
+                            a1 = 1.0 - exp(-src1.a * densityMultiplier * stepSize * (delta / (1.0 - maxVal1 + 1e-6)) * 20.0);
+                            maxVal1 = max(maxVal1, tfc1);
                         }
-                        // Final lighting: combine ambient and diffuse (scaled by shadow)
-                        // Removed shadow floor (mix 0.15) to allow full darkness if ambient is 0
-                        float lightingVal = (ambientLight + diffuseLight * diff * shadow) * lightIntensity;
-                        finalColor = src.rgb * lightingVal + specularPart;
-                    } else {
-                        // Standard Shading
-                        float shadedDiff = diff; // Strict diffuse for standard too
-                        finalColor = src.rgb * (shadedDiff * lightIntensity);
+                    } else { // Standard / Cinematic
+                        a1 = 1.0 - exp(-src1.a * densityMultiplier * stepSize * 20.0);
                     }
                     
-                    // Standard Front-to-Back Composition
-                    accumulatedColor.rgb += (1.0 - accumulatedColor.a) * finalColor * alpha;
-                    accumulatedColor.a   += (1.0 - accumulatedColor.a) * alpha;
+                    if (a1 > 0.0) {
+                        vec3 n1 = -calculateGradient(volumeTexture, pos, boxSize);
+                        if (length(n1) < 0.1) n1 = hitNormal;
+                        float d1 = max(dot(n1, L), (renderMode == 2 ? 0.0 : 0.15));
+                        stepColor1 = vec4(src1.rgb * (ambientLight + diffuseLight * d1) * lightIntensity, a1);
+                    }
                 }
             }
-            
-            pos += rayDir * stepSize;
-            dist += stepSize;
-            distanceFromEntry += stepSize;
         }
+
+        // --- Volume 2 Processing (Overlay) ---
+        if (hasOverlay == 1) {
+            vec3 posV2 = (pos - (overlayOffset * boxSize)) / max(0.001, overlayScale);
+            if (isInside(posV2, clipMin2, clipMax2, boxSize2)) {
+                float val2 = texture(volumeTexture2, posV2 / boxSize2).r;
+                if (renderMode2 == 0) { // MIP
+                    float tfc2 = clamp(val2 * tfSlope2 + tfOffset2, 0.0, 1.0);
+                    if (tfc2 > maxVal2) maxVal2 = tfc2;
+                } else { // VR / MIDA
+                    if (val2 > threshold2) {
+                        float tfc2 = clamp(val2 * tfSlope2 + tfOffset2, 0.0, 1.0);
+                        vec4 src2 = texture(transferFunction2, tfc2);
+                        float a2 = 0.0;
+                        
+                        if (renderMode2 == 3) { // MIDA
+                            float delta = max(0.0, tfc2 - maxVal2);
+                            if (delta > 0.001) {
+                                a2 = 1.0 - exp(-src2.a * densityMultiplier2 * stepSize * (delta / (1.0 - maxVal2 + 1e-6)) * 20.0);
+                                maxVal2 = max(maxVal2, tfc2);
+                            }
+                        } else { // Standard / Cinematic
+                            a2 = 1.0 - exp(-src2.a * densityMultiplier2 * stepSize * 20.0);
+                        }
+
+                        if (a2 > 0.0) {
+                            vec3 n2 = -calculateGradient(volumeTexture2, posV2, boxSize2);
+                            if (length(n2) < 0.1) n2 = hitNormal;
+                            float d2 = max(dot(n2, L), (renderMode2 == 2 ? 0.0 : 0.15));
+                            stepColor2 = vec4(src2.rgb * (ambientLight + diffuseLight * d2) * lightIntensity, a2);
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- Compositing for the Step ---
+        // Blend non-MIP contributions
+        vec4 composite = vec4(0.0);
+        composite.rgb = stepColor1.rgb * stepColor1.a * (1.0 - stepColor2.a) + stepColor2.rgb * stepColor2.a;
+        composite.a = 1.0 - (1.0 - stepColor1.a) * (1.0 - stepColor2.a);
+
+        if (composite.a > 0.0) {
+            accumulatedColor.rgb += (1.0 - accumulatedColor.a) * composite.rgb;
+            accumulatedColor.a   += (1.0 - accumulatedColor.a) * composite.a;
+        }
+
+        pos += rayDir * stepSize;
+        dist += stepSize;
     }
-    else if (renderMode == 3) { // MIDA (Maximum Intensity Difference Accumulation)
-        float maxVal = 0.0;
-        for(int i = 0; i < maxSteps; i++) {
-            if (dist >= tEnd || accumulatedColor.a >= 0.99) break;
-            
-            float val = texture(volumeTexture, pos / boxSize).r;
-            if (val > threshold) {
-                float tf_coord = clamp(val * tfSlope + tfOffset, 0.0, 1.0);
-                
-                // MIDA weighting: only accumulate the difference from the current maximum
-                float delta = max(0.0, tf_coord - maxVal);
-                if (delta > 0.001) {
-                    vec4 src = texture(transferFunction, tf_coord);
-                    
-                    vec3 normal = -calculateGradient(pos);
-                    // Use entry normal if gradient is weak near the surface
-                    if (length(normal) < 0.1 && i < 2) {
-                        normal = hitNormal;
-                    }
-                    
-                    float diff = max(dot(normal, L), 0.15) * lightIntensity;
-                    vec3 finalColor = src.rgb * diff;
-                    
-                    // Alpha scaling using intensity difference
-                    // Weighting by (1.0 - maxVal) helps normalized the contribution
-                    float alpha = src.a * densityMultiplier * stepSize * (delta / (1.0 - maxVal + 1e-6));
-                    alpha = 1.0 - exp(-alpha * 20.0);
-                    
-                    accumulatedColor.rgb += (1.0 - accumulatedColor.a) * finalColor * alpha;
-                    accumulatedColor.a   += (1.0 - accumulatedColor.a) * alpha;
-                    
-                    maxVal = tf_coord;
-                }
-            }
-            
-            pos += rayDir * stepSize;
-            dist += stepSize;
-        }
+
+    // --- Post-Pass: Blend MIP result ---
+    // If a channel was in MIP mode, its contribution hasn't been added yet.
+    if (renderMode == 0 && maxVal1 > threshold) {
+        vec4 mipC1 = texture(transferFunction, maxVal1);
+        // Blend under the VR if we want occlusion, but for multimodality 
+        // it's often better to blend as an overlay.
+        accumulatedColor.rgb = accumulatedColor.rgb * (1.0 - mipC1.a) + mipC1.rgb * mipC1.a;
+        accumulatedColor.a = max(accumulatedColor.a, mipC1.a);
+    }
+    if (hasOverlay == 1 && renderMode2 == 0 && maxVal2 > threshold2) {
+        vec4 mipC2 = texture(transferFunction2, maxVal2);
+        accumulatedColor.rgb = accumulatedColor.rgb * (1.0 - mipC2.a) + mipC2.rgb * mipC2.a;
+        accumulatedColor.a = max(accumulatedColor.a, mipC2.a);
     }
     
     if (accumulatedColor.a < 0.01) discard;
