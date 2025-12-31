@@ -81,7 +81,6 @@ class AppCore:
             return False
 
     def load_dataset(self, folder_path, is_overlay=False):
-        print(f"AppCore: Loading dataset from '{folder_path}' (is_overlay={is_overlay})")
         if os.path.exists(folder_path):
             data = self.volume_loader.load_from_folder(folder_path)
             if data is not None:
@@ -155,8 +154,6 @@ class AppCore:
         if not action_dict:
             return False, response_msg or "I'm not sure how to do that yet."
         
-        print(f"AppCore: Executing action '{action_dict.get('action')}' with params {action_dict.get('params')}")
-            
         action = action_dict.get('action')
         params = action_dict.get('params', {})
         

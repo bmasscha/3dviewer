@@ -457,8 +457,6 @@ class MainWindow(QMainWindow):
         # but since we have the action_dict, we can also pass it to a new core method if needed.
         # For now, AppCore.execute_command_text(text) is the safest way to keep logic in one place.
         success, message = self.core.execute_command_text(self.worker.text)
-        if message:
-            print(f"AI Action Response: {message}")
         return success
 
     def create_named_slider(self, layout, name, axis_idx, callback):
