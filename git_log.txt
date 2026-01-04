@@ -1,0 +1,17 @@
+commit 3c7a4c3284fcf3ca56faf93ceb678330a3390f3f
+Author: bmasscha <45875018+bmasscha@users.noreply.github.com>
+Date:   Wed Dec 31 17:44:45 2025 +0100
+
+    Implement multimodality support, overlay alignment, thin volume handling, and UI enhancements
+
+commit 7ee88d306c64f26305d6a0a1dcbb89ad5f57f1c2
+Author: bmasscha <45875018+bmasscha@users.noreply.github.com>
+Date:   Wed Dec 31 17:40:43 2025 +0100
+
+    added overlay volume
+
+commit 9e65c311303f62974c9252acbf63bddcfce68822
+Author: bmasscha <45875018+bmasscha@users.noreply.github.com>
+Date:   Wed Dec 31 09:49:21 2025 +0100
+
+    Initial stable version

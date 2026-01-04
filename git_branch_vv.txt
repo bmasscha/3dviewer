@@ -1,0 +1,2 @@
+  master                9e65c31 Initial stable version
+* multimodality-support 3c7a4c3 Implement multimodality support, overlay alignment, thin volume handling, and UI enhancements
