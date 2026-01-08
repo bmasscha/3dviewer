@@ -1,6 +1,7 @@
 import sys
 import os
 import traceback
+import logging
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QGridLayout, QLabel, QSlider, 
                              QPushButton, QComboBox, QFileDialog, QFrame,
@@ -9,6 +10,14 @@ from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 from app_core import AppCore
 from widgets.gl_view import GLViewWidget
 from widgets.tf_editor import TFEditorWidget
+from zmq_client import ViewerZMQClient
+from widgets.import_dialog import ImportDialog
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 class AIWorker(QThread):
     finished = pyqtSignal(object, str) # returns (action_dict, response_msg)
@@ -35,6 +44,19 @@ class MainWindow(QMainWindow):
         # Delay shader loading until GL context is ready
         self.setup_ui()
         self.apply_stylesheet()
+        
+        # FIXED WIRING: Inbound=5555 (Server's Out), Outbound=5556 (Server's In)
+        self.zmq_client = ViewerZMQClient(self.core, server_ip="127.0.0.1", inbound_port=5555, outbound_port=5556)
+        
+        # Connect new signals for thread-safe execution
+        self.zmq_client.sig_load_data.connect(self.handle_zmq_load_data)
+        self.zmq_client.sig_exec_command.connect(self.handle_zmq_exec_command)
+        
+        # Legacy callback (optional now, but kept for logging)
+        self.zmq_client.set_command_callback(self.on_zmq_command_received)
+        
+        self.zmq_client.start(component_name="3dviewer", physical_name="3dviewer")
+        logging.info("ZMQ client started - ready to receive commands")
         
         # MainWindow fully initialized.
 
@@ -147,10 +169,28 @@ class MainWindow(QMainWindow):
             vbox, "Diffuse Light", 0, 200, int(self.core.diffuse_light * 100), 
             self.on_diffuse_changed, transform=lambda v: f"{v/100.0:.2f}"
         )
+
+        # Specular Intensity
+        self.slider_specular, self.label_specular = self.create_labeled_slider(
+            vbox, "Specular Intensity", 0, 200, int(self.core.specular_intensity * 100), 
+            self.on_specular_changed, transform=lambda v: f"{v/100.0:.2f}"
+        )
+
+        # Shininess
+        self.slider_shininess, self.label_shininess = self.create_labeled_slider(
+            vbox, "Shininess (Phong)", 1, 128, int(self.core.shininess), 
+            self.on_shininess_changed
+        )
+        
+        # Edge Magnitude (Gradient Weight)
+        self.slider_grad_weight, self.label_grad_weight = self.create_labeled_slider(
+            vbox, "Edge Enhancement", 0, 50, int(self.core.gradient_weight), 
+            self.on_grad_weight_changed
+        )
         
         # Sampling Quality
         self.slider_quality, self.label_quality = self.create_labeled_slider(
-            vbox, "Sampling Quality", 5, 40, int(self.core.sampling_rate * 10), 
+            vbox, "Sampling Quality", 10, 100, int(self.core.sampling_rate * 10), 
             self.on_quality_changed, transform=lambda v: f"{v/10.0:.1f}"
         )
         
@@ -201,6 +241,18 @@ class MainWindow(QMainWindow):
         self.core.sampling_rate = val / 10.0
         self.update_views()
 
+    def on_specular_changed(self, val):
+        self.core.specular_intensity = val / 100.0
+        self.update_views()
+
+    def on_shininess_changed(self, val):
+        self.core.shininess = float(val)
+        self.update_views()
+
+    def on_grad_weight_changed(self, val):
+        self.core.gradient_weight = float(val)
+        self.update_views()
+
     def on_lighting_mode_changed(self, index):
         self.core.lighting_mode = index
         self.update_views()
@@ -235,6 +287,10 @@ class MainWindow(QMainWindow):
         btn_load.clicked.connect(self.on_load)
         btn_load.setObjectName("PrimaryButton")
         vbox.addWidget(btn_load)
+        
+        btn_import_adv = QPushButton("Import Advanced...")
+        btn_import_adv.clicked.connect(self.on_import_advanced)
+        vbox.addWidget(btn_import_adv)
         
         layout.addWidget(container)
 
@@ -429,6 +485,14 @@ class MainWindow(QMainWindow):
         self.label_tf_slope.setText(f"{self.core.tf_slope:.1f}")
         self.label_tf_offset.setText(f"{self.core.tf_offset:.2f}")
 
+        self.slider_specular.setValue(int(self.core.specular_intensity * 100))
+        self.slider_shininess.setValue(int(self.core.shininess))
+        self.slider_grad_weight.setValue(int(self.core.gradient_weight))
+        
+        self.label_specular.setText(f"{self.core.specular_intensity:.2f}")
+        self.label_shininess.setText(f"{self.core.shininess:.1f}")
+        self.label_grad_weight.setText(f"{self.core.gradient_weight:.1f}")
+
         
         # Update slice ranges/values
         vol_w, vol_h, vol_d = self.core.volume_renderer.volume_dims[0]
@@ -446,6 +510,121 @@ class MainWindow(QMainWindow):
         
         # Note: We don't have separate sliders for overlay in the side panel yet,
         # but the core state IS updated.
+
+    def handle_zmq_load_data(self, payload: str):
+        """
+        Slot to handle load_data request from ZMQ thread on the Main Thread.
+        Payload format: "path|uuid"
+        """
+        try:
+            path, uuid = payload.split("|", 1)
+        except ValueError:
+            path = payload
+            uuid = ""
+            
+        logging.info(f"ZMQ requested load_data: {path}")
+        success = self.core.load_dataset(path)
+        
+        status = "SUCCESS" if success else "ERROR"
+        message = f"Successfully loaded from {path}" if success else f"Failed to load from {path}"
+        
+        # Send FINAL ACK via ZMQ Queue
+        if self.zmq_client:
+            self.zmq_client.send_message({
+                "component": "3dviewer",
+                "command": "load_data",
+                "uuid": uuid,
+                "status": "ACK", # Or "COMPLETED"
+                "message": message,
+                "sender": "3dviewer"
+            })
+            
+        self.on_zmq_command_received("load_data", success, message)
+
+    def handle_zmq_exec_command(self, payload: str):
+        """
+        Slot to handle AI command execution from ZMQ thread on the Main Thread.
+        Payload format: "command_text|uuid"
+        """
+        try:
+            command_text, uuid = payload.split("|", 1)
+        except ValueError:
+            command_text = payload
+            uuid = ""
+            
+        logging.info(f"ZMQ requested command: {command_text}")
+        success, message = self.core.execute_command_text(command_text)
+        
+        # Send FINAL ACK via ZMQ Queue
+        if self.zmq_client:
+            self.zmq_client.send_message({
+                "component": "3dviewer",
+                "command": command_text, 
+                "uuid": uuid,
+                "status": "ACK",
+                "message": message,
+                "sender": "3dviewer"
+            })
+            
+        self.on_zmq_command_received(command_text, success, message)
+
+    def on_zmq_command_received(self, command: str, success: bool, message: str):
+        """
+        Callback invoked when a ZMQ command is received and processed.
+        This runs in the ZMQ thread, so we need to be careful with GUI updates.
+        
+        Args:
+            command: The command that was executed
+            success: Whether the command succeeded
+            message: Result message
+        """
+        # Log the command result
+        logging.info(f"ZMQ Command '{command}': {'SUCCESS' if success else 'FAILED'} - {message}")
+        
+        # Schedule GUI update on the main thread using QTimer
+        # This is thread-safe and ensures GUI updates happen on the main thread
+        QTimer.singleShot(0, lambda: self._update_gui_after_zmq_command(command, success, message))
+    
+    def _update_gui_after_zmq_command(self, command: str, success: bool, message: str):
+        """
+        Update GUI elements after a ZMQ command (runs on main thread).
+        
+        Args:
+            command: The command that was executed
+            success: Whether the command succeeded
+            message: Result message
+        """
+        # Update the command log to show ZMQ activity
+        color = "#2ECC71" if success else "#E74C3C"
+        self.cmd_log.append(f"<b style='color:#9B59B6'>ZMQ:</b> {command}")
+        self.cmd_log.append(f"<b style='color:{color}'>Result:</b> {message}")
+        
+        # Auto-scroll the log
+        self.cmd_log.verticalScrollBar().setValue(self.cmd_log.verticalScrollBar().maximum())
+        
+        # If it was a load_data command or any command that changes state, sync UI
+        if success:
+            if command == "load_data":
+                # Update slider ranges for the newly loaded data
+                vol_w, vol_h, vol_d = self.core.volume_renderer.volume_dims[0]
+                if vol_w > 0:
+                    for s, m in [(self.slider_x, vol_w), (self.slider_y, vol_h), (self.slider_z, vol_d)]:
+                        s.setRange(0, m - 1)
+                        s.setEnabled(True)
+                    
+                    self.slider_x.setValue(self.core.slice_indices[0])
+                    self.slider_y.setValue(self.core.slice_indices[1])
+                    self.slider_z.setValue(self.core.slice_indices[2])
+                    
+                    self.folder_label.setText("Loaded via ZMQ")
+                    
+                    # Initialize TF
+                    self.core.set_transfer_function(self.core.current_tf_name)
+            
+            # For any successful command, sync UI and update views
+            self.sync_ui_to_core()
+            self.update_views()
+
 
     def apply_ai_action(self, action_dict):
         """Executes the action via AppCore to ensure consistency, then updates UI."""
@@ -510,6 +689,29 @@ class MainWindow(QMainWindow):
                 self.slider_x.setValue(self.core.slice_indices[0])
                 self.slider_y.setValue(self.core.slice_indices[1])
                 self.slider_z.setValue(self.core.slice_indices[2])
+                
+                # Initialize TF
+                self.core.set_transfer_function(self.core.current_tf_name)
+                self.update_views()
+
+    def on_import_advanced(self):
+        diag = ImportDialog(self.core, self)
+        if diag.exec():
+            folder = diag.folder_path
+            rescale_range = diag.rescale_range
+            
+            if self.core.load_dataset(folder, rescale_range=rescale_range):
+                # Update slider ranges
+                vol_w, vol_h, vol_d = self.core.volume_renderer.volume_dims[0]
+                for s, m in [(self.slider_x, vol_w), (self.slider_y, vol_h), (self.slider_z, vol_d)]:
+                    s.setRange(0, m - 1)
+                    s.setEnabled(True)
+                
+                self.slider_x.setValue(self.core.slice_indices[0])
+                self.slider_y.setValue(self.core.slice_indices[1])
+                self.slider_z.setValue(self.core.slice_indices[2])
+                
+                self.folder_label.setText(f"Rescaled: {folder}")
                 
                 # Initialize TF
                 self.core.set_transfer_function(self.core.current_tf_name)

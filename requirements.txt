@@ -6,3 +6,4 @@ tifffile
 Pillow
 PyGLM
 PyQt6
+acquila_zmq

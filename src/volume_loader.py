@@ -11,11 +11,13 @@ class VolumeLoader:
         self.height = 0
         self.depth = 0
 
-    def load_from_folder(self, folder_path):
+    def load_from_folder(self, folder_path, rescale_range=None):
         """
         Loads all .tif/.tiff files from the specified folder.
         Files are sorted alphabetically to ensure correct sequence.
         Returns the 3D numpy array (Z, Y, X) with uint16 dtype.
+        
+        rescale_range: tuple (min, max) to rescale from to (0, 65535).
         """
         # Find all tiff files
         extensions = ['*.tif', '*.tiff', '*.TIF', '*.TIFF']
@@ -59,6 +61,20 @@ class VolumeLoader:
             except Exception as e:
                 print(f"Error reading slice {i} ({f}): {e}")
         
+        # Rescale if requested
+        if rescale_range is not None:
+            lower, upper = rescale_range
+            print(f"Rescaling data from [{lower}, {upper}] to [0, 65535]...")
+            
+            # Use float32 for intermediate calculation to avoid overflow/underflow
+            # then clip and convert back to uint16
+            data_f = self.data.astype(np.float32)
+            data_f = (data_f - lower) * 65535.0 / (upper - lower)
+            
+            # Clip to [0, 65535]
+            data_f = np.clip(data_f, 0, 65535)
+            self.data = data_f.astype(np.uint16)
+        
         # Calculate stats
         min_val = np.min(self.data)
         max_val = np.max(self.data)
@@ -87,3 +103,47 @@ class VolumeLoader:
         Returns the data pointer or prepared data for OpenGL texture upload.
         """
         return self.data
+
+    def get_quick_stats(self, folder_path, sample_count=5):
+        """
+        Fast scan of the folder to get dimensions, a few sample slices, and a histogram.
+        Returns (width, height, depth, middle_slice, histogram, bin_edges)
+        """
+        extensions = ['*.tif', '*.tiff', '*.TIF', '*.TIFF']
+        files = set()
+        for ext in extensions:
+            files.update(glob.glob(os.path.join(folder_path, ext)))
+        files = sorted(list(files))
+        
+        if not files:
+            return None
+            
+        depth = len(files)
+        mid_idx = depth // 2
+        
+        try:
+            mid_slice = tifffile.imread(files[mid_idx])
+            h, w = mid_slice.shape
+            
+            # Sample a few more slices for a better histogram
+            indices = np.linspace(0, depth - 1, sample_count, dtype=int)
+            samples = []
+            for idx in indices:
+                samples.append(tifffile.imread(files[idx]))
+            
+            all_samples = np.array(samples)
+            hist, bin_edges = np.histogram(all_samples, bins=256, range=(0, 65535))
+            
+            return {
+                'width': w,
+                'height': h,
+                'depth': depth,
+                'middle_slice': mid_slice,
+                'histogram': hist,
+                'bin_edges': bin_edges,
+                'min': np.min(all_samples),
+                'max': np.max(all_samples)
+            }
+        except Exception as e:
+            print(f"Error in get_quick_stats: {e}")
+            return None

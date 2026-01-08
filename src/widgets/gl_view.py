@@ -161,6 +161,9 @@ class GLViewWidget(QOpenGLWidget):
             self.core.ray_shader.set_float("lightIntensity", self.core.light_intensity)
             self.core.ray_shader.set_float("ambientLight", self.core.ambient_light)
             self.core.ray_shader.set_float("diffuseLight", self.core.diffuse_light)
+            self.core.ray_shader.set_float("specularIntensity", self.core.specular_intensity)
+            self.core.ray_shader.set_float("shininess", self.core.shininess)
+            self.core.ray_shader.set_float("gradientWeight", self.core.gradient_weight)
             
             self.core.ray_shader.set_vec3("clipMin", self.core.clip_min.x, self.core.clip_min.y, self.core.clip_min.z)
             self.core.ray_shader.set_vec3("clipMax", self.core.clip_max.x, self.core.clip_max.y, self.core.clip_max.z)
@@ -170,9 +173,8 @@ class GLViewWidget(QOpenGLWidget):
             
             if self.core.lighting_mode == 0: # Fixed
                 lx, ly, lz = 0.5, 1.0, 0.5
-            else: # Headlamp
-                to_cam = glm.normalize(camera.position - camera.target)
-                lx, ly, lz = to_cam.x, to_cam.y, to_cam.z
+            else: # Headlamp (Flashlight)
+                lx, ly, lz = -d.x, -d.y, -d.z
             self.core.ray_shader.set_vec3("lightDir", lx, ly, lz)
             
             quality = self.core.sampling_rate

@@ -41,14 +41,17 @@ class AppCore:
         self.light_intensity = 1.0
         self.ambient_light = 0.15
         self.diffuse_light = 0.8
+        self.specular_intensity = 0.5
+        self.shininess = 32.0
+        self.gradient_weight = 10.0
         self.sampling_rate = 1.0 # Multiplier for quality
         self.lighting_mode = 0 # 0: Fixed, 1: Headlamp
         self.lighting_modes = ["Fixed", "Headlamp"]
         
         self.tf_names = ["grayscale", "viridis", "plasma", "medical", "rainbow"]
-        self.rendering_mode = 1 # 0: MIP, 1: Standard, 2: Cinematic, 3: MIDA
+        self.rendering_mode = 1 # 0: MIP, 1: Standard, 2: Cinematic, 3: MIDA, 4: Shaded, 5: Edge
         self.overlay_rendering_mode = 1
-        self.render_modes = ["MIP", "Volume Rendering", "Cinematic Rendering", "MIDA Rendering"]
+        self.render_modes = ["MIP", "Volume Rendering", "Cinematic Rendering", "MIDA Rendering", "Shaded Volume", "Edge Enhanced"]
         
         self.clip_min = glm.vec3(0.0, 0.0, 0.0)
         self.clip_max = glm.vec3(1.0, 1.0, 1.0)
@@ -80,9 +83,9 @@ class AppCore:
             print(f"Failed to load shaders: {e}")
             return False
 
-    def load_dataset(self, folder_path, is_overlay=False):
+    def load_dataset(self, folder_path, is_overlay=False, rescale_range=None):
         if os.path.exists(folder_path):
-            data = self.volume_loader.load_from_folder(folder_path)
+            data = self.volume_loader.load_from_folder(folder_path, rescale_range=rescale_range)
             if data is not None:
                 d, h, w = data.shape
                 slot = 1 if is_overlay else 0
@@ -184,7 +187,7 @@ class AppCore:
             return True, response_msg
         
         elif action == 'set_mode':
-            mode_map = {'mip': 0, 'volume': 1, 'cinematic': 2, 'mida': 3}
+            mode_map = {'mip': 0, 'volume': 1, 'cinematic': 2, 'mida': 3, 'shaded': 4, 'edge': 5}
             mode_name = params.get('mode', '').lower()
             if mode_name in mode_map:
                 slot = 1 if is_overlay_cmd else 0
@@ -258,6 +261,21 @@ class AppCore:
             else:
                 self.volume_density = value
                 return True, f"Primary density set to {value:.1f} (Recommended range: 10 to 100)"
+
+        elif action == 'set_specular':
+            value = float(params.get('value', 0.5))
+            self.specular_intensity = max(0.0, min(value, 2.0))
+            return True, response_msg or f"Specular intensity set to {self.specular_intensity:.2f}"
+
+        elif action == 'set_shininess':
+            value = float(params.get('value', 32.0))
+            self.shininess = max(1.0, min(value, 128.0))
+            return True, response_msg or f"Shininess set to {self.shininess:.1f}"
+
+        elif action == 'set_gradient_weight':
+            value = float(params.get('value', 0.0))
+            self.gradient_weight = max(0.0, min(value, 50.0))
+            return True, response_msg or f"Gradient weight (Edge Enhancement) set to {self.gradient_weight:.1f}"
             
         elif action == 'load':
             path = params.get('path')

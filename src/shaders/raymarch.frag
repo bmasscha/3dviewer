@@ -40,6 +40,9 @@ uniform float tfOffset2;
 
 uniform float ambientLight;
 uniform float diffuseLight;
+uniform float specularIntensity;
+uniform float shininess;
+uniform float gradientWeight;
 
 uniform vec3 clipMin;
 uniform vec3 clipMax;
@@ -54,16 +57,20 @@ float rand(vec2 co) {
     return fract(sin(dot(co.xy, vec2(12.9898, 78.233))) * 43758.5453);
 }
 
-// Estimate gradient for lighting
+// Estimate gradient for lighting using Central Difference
 vec3 calculateGradient(sampler3D tex, vec3 p, vec3 bSize) {
-    float delta = 0.01;
-    float x = texture(tex, (p + vec3(delta, 0, 0)) / bSize).r - texture(tex, (p - vec3(delta, 0, 0)) / bSize).r;
-    float y = texture(tex, (p + vec3(0, delta, 0)) / bSize).r - texture(tex, (p - vec3(0, delta, 0)) / bSize).r;
-    float z = texture(tex, (p + vec3(0, 0, delta)) / bSize).r - texture(tex, (p - vec3(0, 0, delta)) / bSize).r;
-    vec3 g = vec3(x, y, z);
-    float l = length(g);
-    if (l < 0.0001) return vec3(0.0);
-    return g / l;
+    vec3 uv = p / bSize;
+    vec3 texSize = vec3(textureSize(tex, 0));
+    vec3 dt = vec3(1.0) / texSize;
+    
+    float val = texture(tex, uv).r; // Sample center for potential optimization or debug? Not needed for Central Diff.
+    
+    // Central Difference
+    float dx = texture(tex, uv + vec3(dt.x, 0, 0)).r - texture(tex, uv - vec3(dt.x, 0, 0)).r;
+    float dy = texture(tex, uv + vec3(0, dt.y, 0)).r - texture(tex, uv - vec3(0, dt.y, 0)).r;
+    float dz = texture(tex, uv + vec3(0, 0, dt.z)).r - texture(tex, uv - vec3(0, 0, dt.z)).r;
+    
+    return vec3(dx, dy, dz);
 }
 
 struct RayHit {
@@ -172,10 +179,39 @@ void main()
                     }
                     
                     if (a1 > 0.0) {
-                        vec3 n1 = -calculateGradient(volumeTexture, pos, boxSize);
-                        if (length(n1) < 0.1) n1 = hitNormal;
-                        float d1 = max(dot(n1, L), (renderMode == 2 ? 0.0 : 0.15));
-                        stepColor1 = vec4(src1.rgb * (ambientLight + diffuseLight * d1) * lightIntensity, a1);
+                        vec3 g1 = calculateGradient(volumeTexture, pos, boxSize);
+                        float gMag1 = length(g1);
+                        
+                        // Edge Enhancement (Only in mode 5)
+                        if (renderMode == 5 && gradientWeight > 0.0) {
+                            // Amplify gradient to ensure edges reach 1.0, then raise to power to kill low-gradient noise
+                            float normalizedG = clamp(gMag1 * 10.0, 0.0, 1.0);
+                            float edgeFactor = pow(normalizedG, max(1.0, gradientWeight * 0.5));
+                            a1 *= edgeFactor;
+                        }
+
+                        if (a1 > 0.001) {
+                            vec3 n1 = -normalize(g1);
+                            if (gMag1 < 0.001) n1 = hitNormal;
+                            
+                            // Decide Shading Type
+                            vec3 color1;
+                            if (renderMode >= 4) { // Advanced Shaded Modes (Shaded VR / Edge Enhanced)
+                                // Blinn-Phong
+                                float diff1 = max(dot(n1, L), 0.15);
+                                vec3 V = -rayDir;
+                                vec3 H = normalize(L + V);
+                                float spec1 = pow(max(dot(n1, H), 0.0), shininess);
+                                color1 = src1.rgb * (ambientLight + diffuseLight * diff1) * lightIntensity;
+                                color1 += specularIntensity * spec1 * lightIntensity;
+                            } else {
+                                // Standard / Cinematic / MIDA (Simple Shading)
+                                float diff1 = max(dot(n1, L), (renderMode == 2 ? 0.0 : 0.15));
+                                color1 = src1.rgb * (ambientLight + diffuseLight * diff1) * lightIntensity;
+                            }
+                            
+                            stepColor1 = vec4(color1, a1);
+                        }
                     }
                 }
             }
@@ -206,10 +242,38 @@ void main()
                         }
 
                         if (a2 > 0.0) {
-                            vec3 n2 = -calculateGradient(volumeTexture2, posV2, boxSize2);
-                            if (length(n2) < 0.1) n2 = hitNormal;
-                            float d2 = max(dot(n2, L), (renderMode2 == 2 ? 0.0 : 0.15));
-                            stepColor2 = vec4(src2.rgb * (ambientLight + diffuseLight * d2) * lightIntensity, a2);
+                            vec3 g2 = calculateGradient(volumeTexture2, posV2, boxSize2);
+                            float gMag2 = length(g2);
+                            
+                            // Edge Enhancement (Only in mode 5)
+                            if (renderMode2 == 5 && gradientWeight > 0.0) {
+                                float normalizedG = clamp(gMag2 * 10.0, 0.0, 1.0);
+                                float edgeFactor = pow(normalizedG, max(1.0, gradientWeight * 0.5));
+                                a2 *= edgeFactor;
+                            }
+
+                            if (a2 > 0.001) {
+                                vec3 n2 = -normalize(g2);
+                                if (gMag2 < 0.001) n2 = hitNormal;
+                                
+                                // Decide Shading Type
+                                vec3 color2;
+                                if (renderMode2 >= 4) { // Advanced Shaded Modes
+                                    // Blinn-Phong
+                                    float diff2 = max(dot(n2, L), 0.15);
+                                    vec3 V = -rayDir;
+                                    vec3 H = normalize(L + V);
+                                    float spec2 = pow(max(dot(n2, H), 0.0), shininess);
+                                    color2 = src2.rgb * (ambientLight + diffuseLight * diff2) * lightIntensity;
+                                    color2 += specularIntensity * spec2 * lightIntensity;
+                                } else {
+                                    // Standard / Cinematic / MIDA (Simple Shading)
+                                    float diff2 = max(dot(n2, L), (renderMode2 == 2 ? 0.0 : 0.15));
+                                    color2 = src2.rgb * (ambientLight + diffuseLight * diff2) * lightIntensity;
+                                }
+                                
+                                stepColor2 = vec4(color2, a2);
+                            }
                         }
                     }
                 }
