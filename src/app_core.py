@@ -47,8 +47,16 @@ class AppCore:
         self.sampling_rate = 1.0 # Multiplier for quality
         self.lighting_mode = 0 # 0: Fixed, 1: Headlamp
         self.lighting_modes = ["Fixed", "Headlamp"]
+
+        # Virtual Phase Contrast (Post-Processing)
+        self.vpc_enabled = False
+        self.vpc_distance = 50.0 # Virtual propagation distance
+        self.vpc_wavelength = 1.0 # Virtual wavelength factor
+
         
-        self.tf_names = ["grayscale", "viridis", "plasma", "medical", "rainbow"]
+        self.tf_names = ["grayscale", "viridis", "plasma", "medical", "rainbow", 
+                         "ct_bone", "ct_soft_tissue", "ct_muscle", "ct_lung", 
+                         "cool_warm", "ct_sandstone", "ct_body"]
         self.rendering_mode = 1 # 0: MIP, 1: Standard, 2: Cinematic, 3: MIDA, 4: Shaded, 5: Edge
         self.overlay_rendering_mode = 1
         self.render_modes = ["MIP", "Volume Rendering", "Cinematic Rendering", "MIDA Rendering", "Shaded Volume", "Edge Enhanced"]
@@ -60,6 +68,7 @@ class AppCore:
 
         self.slice_shader = None
         self.ray_shader = None
+        self.vpc_shader = None
 
     def set_rendering_mode(self, index, slot=0):
         if 0 <= index < len(self.render_modes):
@@ -78,6 +87,11 @@ class AppCore:
             
             self.slice_shader = ShaderProgram(slice_vert, slice_frag)
             self.ray_shader = ShaderProgram(ray_vert, ray_frag)
+            
+            # Load VPC Filter Shader (uses same vertex shader as slice/quad)
+            vpc_frag = open(os.path.join(path, 'shaders/vpc_filter.frag')).read()
+            self.vpc_shader = ShaderProgram(slice_vert, vpc_frag)
+            
             return True
         except Exception as e:
             print(f"Failed to load shaders: {e}")
@@ -276,6 +290,11 @@ class AppCore:
             value = float(params.get('value', 0.0))
             self.gradient_weight = max(0.0, min(value, 50.0))
             return True, response_msg or f"Gradient weight (Edge Enhancement) set to {self.gradient_weight:.1f}"
+
+        elif action == 'set_fov':
+            value = float(params.get('value', 45.0))
+            self.camera.fov = max(1.0, min(value, 160.0))
+            return True, response_msg or f"Field of View set to {self.camera.fov:.1f} degrees"
             
         elif action == 'load':
             path = params.get('path')

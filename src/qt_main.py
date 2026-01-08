@@ -83,6 +83,9 @@ class MainWindow(QMainWindow):
         
         # Rendering Methods
         self.create_rendering_panel(left_sidebar)
+
+        # Virtual Phase Contrast (Post-Processing)
+        self.create_vpc_panel(left_sidebar)
         
         # Slice Controls
         self.create_slice_panel(left_sidebar)
@@ -145,6 +148,12 @@ class MainWindow(QMainWindow):
         self.combo_render_mode.setCurrentIndex(self.core.rendering_mode)
         self.combo_render_mode.currentIndexChanged.connect(self.on_render_mode_changed)
         vbox.addWidget(self.combo_render_mode)
+        
+        # Field of View
+        self.slider_fov, self.label_fov = self.create_labeled_slider(
+            vbox, "Field of View (FOV)", 10, 120, int(self.core.camera.fov), 
+            self.on_fov_changed, transform=lambda v: f"{v} deg"
+        )
         
         # 3D Density
         self.slider_vol_density, self.label_vol_density = self.create_labeled_slider(
@@ -217,6 +226,50 @@ class MainWindow(QMainWindow):
         layout.addWidget(container)
 
 
+    def create_vpc_panel(self, layout):
+        container = QFrame()
+        container.setObjectName("SidePanel")
+        vbox = QVBoxLayout(container)
+        
+        title = QLabel("VIRTUAL PHASE CONTRAST")
+        title.setObjectName("PanelTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        vbox.addWidget(title)
+        
+        # Enable Toggle
+        from PyQt6.QtWidgets import QCheckBox
+        self.chk_vpc = QCheckBox("Enable VPC Filter")
+        self.chk_vpc.setChecked(self.core.vpc_enabled)
+        self.chk_vpc.toggled.connect(self.on_vpc_toggled)
+        self.chk_vpc.setStyleSheet("color: white; margin-bottom: 5px;")
+        vbox.addWidget(self.chk_vpc)
+        
+        # Distance Slider
+        self.slider_vpc_dist, self.label_vpc_dist = self.create_labeled_slider(
+            vbox, "Propagation Distance", 0, 200, int(self.core.vpc_distance), 
+            self.on_vpc_distance_changed, transform=lambda v: f"{v}"
+        )
+        
+        # Wavelength Slider
+        self.slider_vpc_wave, self.label_vpc_wave = self.create_labeled_slider(
+            vbox, "Wavelength Factor", 1, 100, int(self.core.vpc_wavelength * 10), 
+            self.on_vpc_wavelength_changed, transform=lambda v: f"{v/10.0:.1f}"
+        )
+
+        layout.addWidget(container)
+
+    def on_vpc_toggled(self, checked):
+        self.core.vpc_enabled = checked
+        self.update_views()
+
+    def on_vpc_distance_changed(self, val):
+        self.core.vpc_distance = float(val)
+        self.update_views()
+
+    def on_vpc_wavelength_changed(self, val):
+        self.core.vpc_wavelength = val / 10.0
+        self.update_views()
+
     def on_render_mode_changed(self, index):
         self.core.set_rendering_mode(index)
         self.update_views()
@@ -263,6 +316,10 @@ class MainWindow(QMainWindow):
 
     def on_tf_offset_changed(self, val):
         self.core.tf_offset = val / 100.0
+        self.update_views()
+
+    def on_fov_changed(self, val):
+        self.core.camera.fov = float(val)
         self.update_views()
 
     def create_dataset_panel(self, layout):
@@ -475,6 +532,13 @@ class MainWindow(QMainWindow):
         self.slider_tf_slope.setValue(int(self.core.tf_slope * 10))
         self.slider_tf_offset.setValue(int(self.core.tf_offset * 100))
         
+        # Sync VPC Controls
+        self.chk_vpc.setChecked(self.core.vpc_enabled)
+        self.slider_vpc_dist.setValue(int(self.core.vpc_distance))
+        self.slider_vpc_wave.setValue(int(self.core.vpc_wavelength * 10))
+        self.label_vpc_dist.setText(f"{int(self.core.vpc_distance)}")
+        self.label_vpc_wave.setText(f"{self.core.vpc_wavelength:.1f}")
+
         # Labels are updated via valueChanged signals, but if value hasn't changed
         # we might want to force update just in case of float precision differences in display
         self.label_vol_density.setText(f"{self.core.volume_density:.1f}")
@@ -493,8 +557,11 @@ class MainWindow(QMainWindow):
         self.label_shininess.setText(f"{self.core.shininess:.1f}")
         self.label_grad_weight.setText(f"{self.core.gradient_weight:.1f}")
 
-        
-        # Update slice ranges/values
+
+
+        # Sync FOV
+        self.slider_fov.setValue(int(self.core.camera.fov))
+        self.label_fov.setText(f"{self.core.camera.fov} deg")
         vol_w, vol_h, vol_d = self.core.volume_renderer.volume_dims[0]
         if vol_w > 0:
             for s, m, v in [(self.slider_x, vol_w, self.core.slice_indices[0]), 

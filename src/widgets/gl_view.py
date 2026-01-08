@@ -34,13 +34,80 @@ class GLViewWidget(QOpenGLWidget):
             else:
                 print("Shaders loaded successfully.")
 
+        # Initialize FBO for Post-Processing
+        self.init_fbo(self.width(), self.height())
+
+    def init_fbo(self, w, h):
+        # Create/Recreate FBO if size changed or not exists
+        if hasattr(self, 'fbo') and self.fbo is not None:
+             gl.glDeleteFramebuffers(1, [self.fbo])
+             gl.glDeleteTextures(1, [self.fbo_texture])
+        
+        self.fbo = gl.glGenFramebuffers(1)
+        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self.fbo)
+        
+        self.fbo_texture = gl.glGenTextures(1)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self.fbo_texture)
+        gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, w, h, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, None)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+        gl.glFramebufferTexture2D(gl.GL_FRAMEBUFFER, gl.GL_COLOR_ATTACHMENT0, gl.GL_TEXTURE_2D, self.fbo_texture, 0)
+        
+        # Depth buffer for FBO is needed for depth testing during volume render
+        self.fbo_depth = gl.glGenRenderbuffers(1)
+        gl.glBindRenderbuffer(gl.GL_RENDERBUFFER, self.fbo_depth)
+        gl.glRenderbufferStorage(gl.GL_RENDERBUFFER, gl.GL_DEPTH_COMPONENT, w, h)
+        gl.glFramebufferRenderbuffer(gl.GL_FRAMEBUFFER, gl.GL_DEPTH_ATTACHMENT, gl.GL_RENDERBUFFER, self.fbo_depth)
+        
+        if gl.glCheckFramebufferStatus(gl.GL_FRAMEBUFFER) != gl.GL_FRAMEBUFFER_COMPLETE:
+            print("Error: Framebuffer is not complete!")
+            
+        # Restore default FBO
+        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self.defaultFramebufferObject())
+
     def resizeGL(self, w, h):
         print(f"resizeGL called: {w}x{h}")
         gl.glViewport(0, 0, w, h)
+        self.init_fbo(w, h)
 
     def paintGL(self):
-        gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
+        default_fbo = self.defaultFramebufferObject()
         
+        # --- Pass 1: Render Volume to FBO ---
+        if self.core.vpc_enabled and hasattr(self, 'fbo'):
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self.fbo)
+            gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
+        else:
+            # Render directly to widget backbuffer
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, default_fbo) 
+            gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
+        
+        self.render_scene()
+        
+        # --- Pass 2: Apply VPC Filter (if enabled) ---
+        if self.core.vpc_enabled and hasattr(self, 'fbo'):
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, default_fbo) # Switch back to widget
+            gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT) # Clear screen
+
+            
+            if self.core.vpc_shader:
+                self.core.vpc_shader.use()
+                
+                gl.glActiveTexture(gl.GL_TEXTURE0)
+                gl.glBindTexture(gl.GL_TEXTURE_2D, self.fbo_texture)
+                self.core.vpc_shader.set_int("textureSampler", 0)
+                self.core.vpc_shader.set_float("distance", self.core.vpc_distance / 100.0) # Normalize?? 
+                # User range 0-100, shader param usually small
+                self.core.vpc_shader.set_float("wavelength", self.core.vpc_wavelength)
+                self.core.vpc_shader.set_int("enabled", 1)
+                
+                self.render_quad()
+            else:
+                # Fallback: just draw the texture
+                # (Ideally use a simple texture shader, but we can assume vpc_shader loads if we are here)
+                pass
+
+    def render_scene(self):
         if not self.core.volume_renderer.texture_ids:
             return
 

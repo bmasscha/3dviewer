@@ -116,7 +116,9 @@ void main()
     vec2 uv = (TexCoord - 0.5) * 2.0;
     uv.x *= resolution.x / resolution.y;
     
-    vec3 rayDir = normalize(camDir + uv.x * camRight + uv.y * camUp);
+    // FOV-based Perspective (Pinhole Camera)
+    float tanHalfFov = tan(radians(fov) * 0.5);
+    vec3 rayDir = normalize(camDir + (uv.x * tanHalfFov) * camRight + (uv.y * tanHalfFov) * camUp);
     
     RayHit hit = intersectBox(camPos, rayDir);
     

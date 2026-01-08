@@ -76,6 +76,108 @@ def get_colormap(name: str, size: int = 256, alpha_ramp: np.ndarray = None) -> n
         
         return np.column_stack([r, g, b, a]).astype(np.float32)
 
+    elif name == "ct_bone":
+        # CT Bone: Transparent -> Yellow/Ivory -> White
+        # Looks good for high density structures
+        kp_pos = [0.0, 0.4, 0.6, 1.0]
+        kp_r = [0.0, 0.9, 1.0, 1.0]
+        kp_g = [0.0, 0.8, 0.95, 1.0]
+        kp_b = [0.0, 0.5, 0.8, 1.0]
+        
+        r = np.interp(t, kp_pos, kp_r)
+        g = np.interp(t, kp_pos, kp_g)
+        b = np.interp(t, kp_pos, kp_b)
+        a = t if alpha_ramp is None else alpha_ramp
+        return np.column_stack([r, g, b, a]).astype(np.float32)
+
+    elif name == "ct_soft_tissue":
+        # Soft Tissue / Flesh: Transparent -> Tan -> Orange -> Red
+        kp_pos = [0.0, 0.2, 0.5, 1.0]
+        kp_r = [0.0, 0.8, 1.0, 0.8]
+        kp_g = [0.0, 0.5, 0.6, 0.2]
+        kp_b = [0.0, 0.4, 0.4, 0.1]
+        
+        r = np.interp(t, kp_pos, kp_r)
+        g = np.interp(t, kp_pos, kp_g)
+        b = np.interp(t, kp_pos, kp_b)
+        a = t if alpha_ramp is None else alpha_ramp
+        return np.column_stack([r, g, b, a]).astype(np.float32)
+
+    elif name == "ct_muscle":
+        # Muscle & Organ: Transparent -> Deep Red -> Brown
+        kp_pos = [0.0, 0.3, 0.7, 1.0]
+        kp_r = [0.0, 0.6, 0.7, 0.4]
+        kp_g = [0.0, 0.1, 0.2, 0.1]
+        kp_b = [0.0, 0.1, 0.1, 0.1]
+        
+        r = np.interp(t, kp_pos, kp_r)
+        g = np.interp(t, kp_pos, kp_g)
+        b = np.interp(t, kp_pos, kp_b)
+        a = t if alpha_ramp is None else alpha_ramp
+        return np.column_stack([r, g, b, a]).astype(np.float32)
+
+    elif name == "ct_lung":
+        # Lung / Air: Transparent -> Black -> Blue/Cyan
+        # Typically inverted in standard viewing (Air is low density)
+        # But this map gives blueish tint to lower end if used with proper windowing
+        kp_pos = [0.0, 0.3, 0.7, 1.0]
+        kp_r = [0.0, 0.0, 0.0, 0.5]
+        kp_g = [0.0, 0.0, 0.5, 0.8]
+        kp_b = [0.0, 0.0, 1.0, 1.0]
+        
+        r = np.interp(t, kp_pos, kp_r)
+        g = np.interp(t, kp_pos, kp_g)
+        b = np.interp(t, kp_pos, kp_b)
+        a = t if alpha_ramp is None else alpha_ramp
+        return np.column_stack([r, g, b, a]).astype(np.float32)
+    
+    elif name == "cool_warm":
+        # Diverging: Blue -> White -> Red
+        kp_pos = [0.0, 0.5, 1.0]
+        kp_r = [0.23, 0.86, 0.70]
+        kp_g = [0.29, 0.86, 0.01]
+        kp_b = [0.75, 0.86, 0.14]
+        # Actually let's use a better standard cool-warm approximation
+        # 0.0: Blue (0.23, 0.299, 0.754)
+        # 0.5: Light Gray (0.86, 0.86, 0.86)
+        # 1.0: Red (0.70, 0.015, 0.14)
+        
+        r = np.interp(t, kp_pos, kp_r)
+        g = np.interp(t, kp_pos, kp_g)
+        b = np.interp(t, kp_pos, kp_b)
+        a = t if alpha_ramp is None else alpha_ramp
+        return np.column_stack([r, g, b, a]).astype(np.float32)
+
+    elif name == "ct_sandstone":
+        # CT-Sandstone: Black -> Beige -> Sepia -> White
+        kp_pos = [0.0, 0.3, 0.6, 1.0]
+        kp_r = [0.0, 0.8, 0.6, 1.0]
+        kp_g = [0.0, 0.7, 0.4, 0.95]
+        kp_b = [0.0, 0.5, 0.2, 0.8]
+        
+        r = np.interp(t, kp_pos, kp_r)
+        g = np.interp(t, kp_pos, kp_g)
+        b = np.interp(t, kp_pos, kp_b)
+        a = t if alpha_ramp is None else alpha_ramp
+        return np.column_stack([r, g, b, a]).astype(np.float32)
+
+    elif name == "ct_body":
+        # Full Body Composite Scheme based on typical Hounsfield Units
+        
+        # Mapping logic (approximate for normalized range 0..1):
+        kp_pos = [0.0, 0.15, 0.25, 0.30, 0.40, 0.60, 0.90, 1.0]
+        
+        # Colors (R, G, B)
+        kp_r = [0.0, 0.0, 0.95, 0.90, 0.60, 0.90, 1.00, 1.00]
+        kp_g = [0.0, 0.8, 0.90, 0.40, 0.10, 0.90, 1.00, 1.00]
+        kp_b = [0.0, 1.0, 0.60, 0.40, 0.10, 0.80, 1.00, 1.00]
+        
+        r = np.interp(t, kp_pos, kp_r)
+        g = np.interp(t, kp_pos, kp_g)
+        b = np.interp(t, kp_pos, kp_b)
+        a = t if alpha_ramp is None else alpha_ramp
+        return np.column_stack([r, g, b, a]).astype(np.float32)
+
     elif name == "rainbow":
         # Classic Rainbow (Violet-Blue-Green-Yellow-Orange-Red)
         kp_pos = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
