@@ -1,42 +1,47 @@
-from acquila_zmq import AcquilaServer
-import json
+"""
+ZMQ Server for 3D Viewer - Acquila Protocol
+Runs the message relay server for ZMQ communication between components.
 
-class VerboseServer(AcquilaServer):
-    def start(self):
-        import zmq
-        # Set a timeout so the loop doesn't block forever and can catch Ctrl+C
-        self.socket_in.setsockopt(zmq.RCVTIMEO, 1000) 
-        
-        self.running = True
-        print("--- VERBOSE ROUTING ENABLED ---")
-        print(f"Server receiving on: 5556")
-        print(f"Server broadcasting on: 5555")
-        print("Waiting for messages... (Press Ctrl+C to stop)\n")
-        
-        try:
-            while self.running:
-                try:
-                    # Receive message (now waits max 1 second)
-                    msg_str = self.socket_in.recv_string()
-                except zmq.Again:
-                    # No message received in the last second, just loop again
-                    continue
-                
-                try:
-                    data = json.loads(msg_str)
-                    comp = data.get('component', 'unknown')
-                    cmd = data.get('command', 'unknown')
-                    uuid = data.get('uuid', 'no-uuid')
-                    print(f"[SERVER] Routed: {comp} -> {cmd} (ID: {uuid[:8]})")
-                except:
-                    print(f"[SERVER] Routed raw message: {msg_str[:100]}...")
-                
-                self.socket_out.send_string(msg_str)
-        except KeyboardInterrupt:
-            print("\n[SERVER] Stopping via Ctrl+C...")
-        finally:
-            self.stop()
+Usage:
+    python run_server.py
+
+The server routes messages between clients (script_runner, 3dviewer, etc.)
+"""
+from acquila_zmq import AcquilaServer
+import signal
+import sys
+
+
+def main():
+    print("=" * 60)
+    print("Acquila ZMQ Server")
+    print("=" * 60)
+    print()
+    print("Default ports:")
+    print("  Outbound (Server -> Clients): 5555")
+    print("  Inbound  (Clients -> Server): 5556")
+    print()
+    print("Press Ctrl+C to stop the server...")
+    print()
+    
+    # Create and start the server
+    server = AcquilaServer()
+    
+    # Handle Ctrl+C gracefully
+    def signal_handler(sig, frame):
+        print("\n[SERVER] Shutting down...")
+        server.stop()
+        sys.exit(0)
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    # Start the server (blocking)
+    try:
+        server.start()
+    except Exception as e:
+        print(f"[SERVER] Error: {e}")
+        server.stop()
+
 
 if __name__ == "__main__":
-    server = VerboseServer()
-    server.start()
+    main()

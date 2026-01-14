@@ -5,6 +5,7 @@ This document explains how the 3D Viewer application integrates with the `acquil
 ## Architecture
 
 The 3D Viewer acts as a **ZMQ client** with:
+
 - **Component Name**: `3dviewer`
 - **Physical Name**: `3dviewer`
 
@@ -50,67 +51,65 @@ python src/qt_main.py
 ```
 
 The ZMQ client will automatically start when the application launches. You should see:
+
 ```
 INFO - ZMQ client started - ready to receive commands
 ```
 
 ## Supported Commands
 
-### 1. Load Data
+All commands follow the Acquila JSON format:
 
-Load a dataset from a specified path.
-
-**Command**: `load_data`  
-**Arguments**: 
-- `arg1`: Path to the data folder
-
-**Example**:
 ```python
 client.send_command(
     component="3dviewer",
-    command="load_data",
-    arg1="/path/to/data",
+    command="COMMAND_NAME",
+    arg1="value",
+    arg2="value",  # optional
     wait_for="ACK"
 )
 ```
 
-### 2. AI Commands
+### Command Reference
 
-All existing AI commands are supported through the ZMQ interface:
+| Command | arg1 | arg2 | Description |
+|---------|------|------|-------------|
+| `load_data` | path | - | Load dataset from folder |
+| `set_rendering_mode` | mode (mip/volume/cinematic/mida/shaded/edge) | slot (0/1) | Set rendering mode |
+| `set_transfer_function` | tf_name | slot (0/1) | Set transfer function |
+| `set_threshold` | value (0.0-1.0) | slot (0/1) | Set volume threshold |
+| `set_density` | value (0.1-500) | slot (0/1) | Set volume density |
+| `set_slice` | axis (x/y/z) | value or percent% | Set slice position |
+| `rotate` | axis (x/y) | degrees | Rotate camera |
+| `zoom` | value (+/-) | - | Zoom in/out |
+| `reset_camera` | - | - | Reset camera to default |
+| `set_lighting` | mode (fixed/headlamp) | - | Set lighting mode |
+| `set_quality` | value (0.1-5.0) | - | Set sampling quality |
+| `set_fov` | value (1-160) | - | Set field of view |
+| `crop` | axis (x/y/z) | min,max (0.0-1.0) | Crop volume |
+| `set_specular` | value (0.0-2.0) | - | Specular intensity |
+| `set_shininess` | value (1-128) | - | Shininess |
+| `set_gradient_weight` | value (0-50) | - | Edge enhancement |
+| `get_status` | - | - | Return current state |
 
-- **Rendering Mode**: `set rendering mode to <mode>`
-  - Modes: MIP, Average, DVR, Isosurface
-  
-- **Density**: `set density to <value>`
-  - Value: 0.1 to 50.0
+### Examples
 
-- **Transfer Function**: `set transfer function to <name>`
-  - Names: Grayscale, Jet, Hot, Cool, Viridis, Plasma, etc.
-
-- **Rotation**: `rotate <degrees>`
-  - Degrees: any number
-
-- **Zoom**: `zoom in`, `zoom out`, `zoom to <level>`
-
-- **Slice Navigation**: `slice <axis> <index>`
-  - Axis: x, y, z
-  - Index: 0 to max dimension
-
-**Example**:
 ```python
-# Change rendering mode
-client.send_command(
-    component="3dviewer",
-    command="set rendering mode to MIP",
-    wait_for="ACK"
-)
+# Load dataset
+client.send_command(component="3dviewer", command="load_data", 
+                    arg1="c:/data/volume", wait_for="ACK", timeout=30)
 
-# Adjust density
-client.send_command(
-    component="3dviewer",
-    command="set density to 5",
-    wait_for="ACK"
-)
+# Set rendering mode
+client.send_command(component="3dviewer", command="set_rendering_mode", 
+                    arg1="cinematic", wait_for="ACK")
+
+# Adjust parameters
+client.send_command(component="3dviewer", command="set_density", 
+                    arg1="100", wait_for="ACK")
+
+# Rotate view
+client.send_command(component="3dviewer", command="rotate", 
+                    arg1="y", arg2="45", wait_for="ACK")
 ```
 
 ## Message Protocol
@@ -146,6 +145,7 @@ python test_zmq_commands.py
 ```
 
 This script demonstrates:
+
 - Loading a dataset
 - Changing rendering modes
 - Adjusting parameters
@@ -160,6 +160,7 @@ When commands are received via ZMQ:
 3. **View Refresh**: All viewports update after successful commands
 
 Example log output:
+
 ```
 ZMQ: load_data
 Result: Successfully loaded dataset from: /path/to/data
@@ -172,6 +173,7 @@ Result: Successfully loaded dataset from: /path/to/data
 **Symptom**: No "ZMQ client started" message in logs
 
 **Solutions**:
+
 - Verify `acquila_zmq` is installed: `pip show acquila_zmq`
 - Check that ZMQ server is running
 - Review console for error messages
@@ -181,6 +183,7 @@ Result: Successfully loaded dataset from: /path/to/data
 **Symptom**: Script_runner sends commands but viewer doesn't respond
 
 **Solutions**:
+
 - Verify component name is exactly `"3dviewer"`
 - Check server IP and ports match (default: 127.0.0.1:5555/5556)
 - Ensure ZMQ server is running before starting the viewer
@@ -191,6 +194,7 @@ Result: Successfully loaded dataset from: /path/to/data
 **Symptom**: Commands received but return ERROR
 
 **Solutions**:
+
 - Check command syntax matches AI command format
 - Verify file paths are absolute and exist
 - Review error message in the response

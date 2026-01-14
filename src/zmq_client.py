@@ -8,6 +8,7 @@ import logging
 import queue
 from typing import Callable, Optional
 from acquila_zmq import AcquilaClient
+from zmq_command_processor import ZMQCommandProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,8 @@ class ViewerZMQClient(QObject):
     Connects to the Acquila ZMQ Server to receive commands.
     """
     # Signals must be defined at class level
-    sig_load_data = pyqtSignal(str)   # path
+    sig_load_data = pyqtSignal(str)
+    sig_set_tf = pyqtSignal(str) # payload: "name|slot|uuid"
     sig_exec_command = pyqtSignal(str) # command_text
     
     def __init__(self, app_core, server_ip: str = "127.0.0.1", 
@@ -31,6 +33,9 @@ class ViewerZMQClient(QObject):
         self.server_ip = server_ip
         self.inbound_port = inbound_port
         self.outbound_port = outbound_port
+        
+        # Initialize the command processor
+        self.command_processor = ZMQCommandProcessor(app_core)
         
         self.client = AcquilaClient(
             server_ip=server_ip,
@@ -62,7 +67,8 @@ class ViewerZMQClient(QObject):
     def _handle_command(self, client, command_data: dict) -> str:
         """
         Internal command handler called by ZMQ thread.
-        Emits signals to execute on Main Thread.
+        Uses ZMQCommandProcessor for structured command handling.
+        Emits signals for commands that require Main Thread execution.
         """
         try:
             # Direct print to console for debugging
@@ -71,52 +77,62 @@ class ViewerZMQClient(QObject):
             cmd = command_data.get("command", "")
             arg1 = command_data.get("arg1", "")
             arg2 = command_data.get("arg2", "")
-            msg_uuid = command_data.get("uuid", "")
+            # acquila_zmq uses uppercase 'UUID', handle both cases
+            msg_uuid = command_data.get("UUID", "") or command_data.get("uuid", "")
             
             logger.info(f"Received command: {cmd}, arg1={arg1}, arg2={arg2}")
             
-            # Helper to queue feedback immediately
+            # Helper to queue feedback/ACK via ZMQ
             def send_ack(status_msg, status_code="ACK"):
                 feedback = {
                     "component": "3dviewer",
                     "command": cmd,
-                    "uuid": msg_uuid,
+                    "UUID": msg_uuid,  # Must be uppercase for AcquilaClient
                     "status": status_code,
                     "message": status_msg,
-                    "sender": "3dviewer"
+                    "reply": status_msg,  # Used by AcquilaClient for logging
+                    "sender": "3dviewer",
+                    "reply type": status_code
                 }
+                # print(f"[ZMQ-CLIENT] Sending ACK: {feedback}")
                 self.send_message(feedback)
 
-            # Handle load_data command
+            # load_data requires Main Thread for OpenGL operations
             if cmd == "load_data":
                 if not arg1:
                     send_ack("ERROR: No path provided", "ERROR")
                     return "ERROR: load_data requires a path argument"
                 
                 print(f"[ZMQ-CLIENT] Requesting load_data on MAIN THREAD: {arg1}")
-                send_ack("Loading dataset...", "PROCESSING") # Intermediate status
+                send_ack("Loading dataset...", "PROCESSING")
                 
-                # EMIT SIGNAL to Main Thread
-                # We pass the UUID so the main thread can send the final ACK
+                # EMIT SIGNAL to Main Thread (pass UUID for final ACK)
                 self.sig_load_data.emit(f"{arg1}|{msg_uuid}") 
+                return "SUCCESS"
+
+            # set_transfer_function requires Main Thread for GL texture updates
+            if cmd == "set_transfer_function":
+                if not arg1:
+                    send_ack("ERROR: No transfer function name provided", "ERROR")
+                    return "ERROR: Missing TF name"
                 
+                print(f"[ZMQ-CLIENT] Requesting set_transfer_function on MAIN THREAD: {arg1}")
+                send_ack("Setting transfer function...", "PROCESSING")
+                
+                # Format: "name|slot|uuid"
+                slot_val = arg2 if arg2 else "0"
+                self.sig_set_tf.emit(f"{arg1}|{slot_val}|{msg_uuid}")
                 return "SUCCESS"
             
-            # Handle AI commands
-            else:
-                command_text = cmd
-                if arg1: command_text += f" {arg1}"
-                if arg2: command_text += f" {arg2}"
-                
-                print(f"[ZMQ-CLIENT] Requesting AI command on MAIN THREAD: {command_text}")
-                # For simple commands, we might just let the main thread send the final ACK
-                # But sending a "Processing" ACK here keeps the UI responsive
-                # send_ack(f"Processing: {command_text}", "PROCESSING")
-                
-                # EMIT SIGNAL to Main Thread
-                self.sig_exec_command.emit(f"{command_text}|{msg_uuid}")
-                
+            # All other commands: use ZMQCommandProcessor
+            result = self.command_processor.process(command_data)
+            
+            if result.get("success"):
+                send_ack(result.get("message", "OK"), "ACK")
                 return "SUCCESS"
+            else:
+                send_ack(result.get("message", "ERROR"), "ERROR")
+                return f"ERROR: {result.get('message')}"
                     
         except Exception as e:
             error_msg = f"Exception handling command: {str(e)}"
@@ -181,7 +197,7 @@ class ViewerZMQClient(QObject):
                     while True: # Drain queue
                         msg_data = self.outgoing_queue.get_nowait()
                         json_str = json.dumps(msg_data)
-                        # print(f"[ZMQ] sending: {json_str}")
+                        # print(f"[ZMQ] SENDING ACK: {json_str[:200]}")
                         pub_sock.send_string(json_str)
                         self.outgoing_queue.task_done()
                 except queue.Empty:

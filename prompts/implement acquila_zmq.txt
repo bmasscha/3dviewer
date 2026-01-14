@@ -1,0 +1,14 @@
+Task implement the acquila_zmq client in 3dviewer.
+
+acquila_zmq can be found on github: https://github.com/bmasscha/acquila_zmq.git
+
+1) study how the library works. 
+2) look at the client example
+3) uninstall the library acquila_zmq. use the python and pip version in the venv.
+4) get the library acquila_zmq from github and install it in the 3dviewer venv. 
+5) we will make a new command processor that tries to execute commands which come in via the ZMQ tunnel. The acquila_zmq library may not be altered. It is the 3dviewer command processing which needs to be standardized to the acquila json format. 
+6) commands will always be in the same format like 3dviewer COMMAND ARG reply_type (see documentation). Thus in the command processor we have to translate which events we have to trigger to realize what the command is expecting.
+7) Make a list of all possible commands and arguments that we will accept from the ZMQ tunnel (eg load_data;path, set_transfer_function;rainbow, set_rendering_mode;MIP ...)
+8) Start by making a plan of how we will approach this task
+
+

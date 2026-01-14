@@ -52,6 +52,7 @@ class MainWindow(QMainWindow):
         
         # Connect new signals for thread-safe execution
         self.zmq_client.sig_load_data.connect(self.handle_zmq_load_data)
+        self.zmq_client.sig_set_tf.connect(self.handle_zmq_set_tf)
         self.zmq_client.sig_exec_command.connect(self.handle_zmq_exec_command)
         
         # Legacy callback (optional now, but kept for logging)
@@ -749,13 +750,61 @@ class MainWindow(QMainWindow):
             self.zmq_client.send_message({
                 "component": "3dviewer",
                 "command": "load_data",
-                "uuid": uuid,
+                "UUID": uuid,
                 "status": "ACK", # Or "COMPLETED"
                 "message": message,
-                "sender": "3dviewer"
+                "reply": message,
+                "sender": "3dviewer",
+                "reply type": "ACK"
             })
             
         self.on_zmq_command_received("load_data", success, message)
+
+    def handle_zmq_set_tf(self, payload: str):
+        """
+        Slot to handle set_transfer_function on Main Thread.
+        Payload: "name|slot|uuid"
+        """
+        try:
+            name, slot_str, uuid = payload.split("|", 2)
+            slot = int(slot_str)
+        except ValueError:
+            name = payload
+            slot = 0
+            uuid = ""
+            
+        logging.info(f"ZMQ requested set_transfer_function: {name} (slot {slot})")
+        
+        # Execute on Main Thread (GL context is valid here)
+        success = False
+        message = ""
+        try:
+            if name in self.core.tf_names:
+                self.core.set_transfer_function(name, slot=slot)
+                success = True
+                target = "Overlay" if slot == 1 else "Primary"
+                message = f"{target} transfer function set to {name}"
+            else:
+                success = False
+                message = f"Unknown transfer function: {name}"
+        except Exception as e:
+            success = False
+            message = f"Error setting TF: {str(e)}"
+            
+        # Send FINAL ACK via ZMQ Queue
+        if self.zmq_client:
+            self.zmq_client.send_message({
+                "component": "3dviewer",
+                "command": "set_transfer_function",
+                "UUID": uuid,
+                "status": "ACK",
+                "message": message,
+                "reply": message,
+                "sender": "3dviewer",
+                "reply type": "ACK"
+            })
+            
+        self.on_zmq_command_received("set_transfer_function", success, message)
 
     def handle_zmq_exec_command(self, payload: str):
         """
@@ -776,10 +825,12 @@ class MainWindow(QMainWindow):
             self.zmq_client.send_message({
                 "component": "3dviewer",
                 "command": command_text, 
-                "uuid": uuid,
+                "UUID": uuid,
                 "status": "ACK",
                 "message": message,
-                "sender": "3dviewer"
+                "reply": message,
+                "sender": "3dviewer",
+                "reply type": "ACK"
             })
             
         self.on_zmq_command_received(command_text, success, message)
