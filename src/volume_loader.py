@@ -1,3 +1,5 @@
+import os
+import sys
 import glob
 import numpy as np
 import tifffile
@@ -6,6 +8,7 @@ from scipy.ndimage import zoom
 
 class VolumeLoader:
     def __init__(self):
+        self.data = None
         self.width = 0
         self.height = 0
         self.depth = 0
