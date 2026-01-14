@@ -14,9 +14,10 @@ class AppCore:
         self.volume_renderer = VolumeRenderer()
         self.camera = Camera(target=(0.5, 0.5, 0.5))
         self.command_interpreter = CommandInterpreter()
+        self.current_dataset_path = None
         
         self.slice_indices = [0, 0, 0] # X, Y, Z
-        self.slice_density = 5.0
+        self.slice_density = 0.25
         self.slice_threshold = 0.06
         
         # Primary Volume
@@ -97,15 +98,22 @@ class AppCore:
             print(f"Failed to load shaders: {e}")
             return False
 
-    def load_dataset(self, folder_path, is_overlay=False, rescale_range=None):
+    def load_dataset(self, folder_path, is_overlay=False, rescale_range=None, z_range=None, binning_factor=1, use_8bit=False):
         if os.path.exists(folder_path):
-            data = self.volume_loader.load_from_folder(folder_path, rescale_range=rescale_range)
+            data = self.volume_loader.load_from_folder(
+                folder_path, 
+                rescale_range=rescale_range,
+                z_range=z_range,
+                binning_factor=binning_factor,
+                use_8bit=use_8bit
+            )
             if data is not None:
                 d, h, w = data.shape
                 slot = 1 if is_overlay else 0
                 self.volume_renderer.create_texture(data, w, h, d, slot=slot)
                 
                 if not is_overlay:
+                    self.current_dataset_path = folder_path
                     self.slice_indices = [w//2, h//2, d//2]
                     # Update camera target to center of volume
                     box_size = self.get_box_size(slot=0)

@@ -1,9 +1,11 @@
 import os
 import numpy as np
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QPushButton, QFileDialog, QSlider, QFrame, QSizePolicy)
+                             QPushButton, QFileDialog, QSlider, QFrame, QSizePolicy,
+                             QComboBox, QCheckBox, QSpinBox, QGridLayout)
 from PyQt6.QtCore import Qt, pyqtSignal, QRect, QPoint, QSize
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QImage, QPixmap
+import psutil
 
 class HistogramWidget(QFrame):
     """
@@ -132,6 +134,9 @@ class ImportDialog(QDialog):
         self.folder_path = None
         self.stats = None
         self.rescale_range = (0, 65535)
+        self.z_range = (0, 0)
+        self.binning_factor = 1
+        self.use_8bit = False
         
         self.setup_ui()
         self.apply_style()
@@ -139,20 +144,24 @@ class ImportDialog(QDialog):
     def setup_ui(self):
         layout = QVBoxLayout(self)
         
-        # Top: Folder Selection
+        # 1. Folder Selection
         top_row = QHBoxLayout()
         self.path_label = QLabel("No folder selected")
         btn_browse = QPushButton("Select Folder...")
         btn_browse.clicked.connect(self.on_browse)
         top_row.addWidget(self.path_label, 1)
         top_row.addWidget(btn_browse)
-        layout.addLayout(top_row)
+        layout.addWidget(self.create_group_frame(top_row, "Source Folder"))
         
-        # Center: Preview and Histogram
+        # 2. Main Area (Preview + Histogram)
         center_row = QHBoxLayout()
         
-        # Left: Preview
+        # Preview Column
         preview_vbox = QVBoxLayout()
+        title_preview = QLabel("SLICE PREVIEW")
+        title_preview.setStyleSheet("font-weight: bold; color: #FFF;")
+        preview_vbox.addWidget(title_preview)
+        
         self.preview_label = QLabel("Select a folder to see preview")
         self.preview_label.setFixedSize(400, 400)
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -163,24 +172,68 @@ class ImportDialog(QDialog):
         self.slice_slider.setEnabled(False)
         self.slice_slider.valueChanged.connect(self.update_preview)
         preview_vbox.addWidget(self.slice_slider)
-        
         center_row.addLayout(preview_vbox)
         
-        # Right: Histogram
-        hist_vbox = QVBoxLayout()
-        hist_vbox.addWidget(QLabel("Intensity Distribution (Rescaling Range)"))
+        # Histogram and Configuration Column
+        config_vbox = QVBoxLayout()
+        
+        # Intensity Range
+        config_vbox.addWidget(QLabel("Intensity Distribution (Rescaling Range)"))
         self.hist_widget = HistogramWidget()
         self.hist_widget.rangeChanged.connect(self.on_range_changed)
-        hist_vbox.addWidget(self.hist_widget)
+        config_vbox.addWidget(self.hist_widget)
         
         self.range_info = QLabel("Selected Range: [0, 65535] -> [0, 65535]")
         self.range_info.setStyleSheet("font-weight: bold; color: #3498DB;")
-        hist_vbox.addWidget(self.range_info)
+        config_vbox.addWidget(self.range_info)
         
-        center_row.addLayout(hist_vbox, 1)
+        # Data Reduction Options
+        reduction_group = QFrame()
+        reduction_group.setStyleSheet("background-color: #222; border-radius: 4px; padding: 5px;")
+        reduction_layout = QGridLayout(reduction_group)
+        reduction_layout.addWidget(QLabel("DATA REDUCTION OPTIONS"), 0, 0, 1, 3)
+        
+        # Z-Range
+        reduction_layout.addWidget(QLabel("Slice Range (Z):"), 1, 0)
+        self.spin_z_start = QSpinBox()
+        self.spin_z_end = QSpinBox()
+        self.spin_z_start.valueChanged.connect(self.on_reduction_changed)
+        self.spin_z_end.valueChanged.connect(self.on_reduction_changed)
+        reduction_layout.addWidget(self.spin_z_start, 1, 1)
+        reduction_layout.addWidget(self.spin_z_end, 1, 2)
+        
+        # Binning
+        reduction_layout.addWidget(QLabel("Spatial Binning:"), 2, 0)
+        self.combo_binning = QComboBox()
+        self.combo_binning.addItems(["None (1x1x1)", "2x2x2", "4x4x4"])
+        self.combo_binning.currentIndexChanged.connect(self.on_reduction_changed)
+        reduction_layout.addWidget(self.combo_binning, 2, 1, 1, 2)
+        
+        # 8-bit mode
+        self.chk_8bit = QCheckBox("Import as 8-bit (halves memory usage)")
+        self.chk_8bit.toggled.connect(self.on_reduction_changed)
+        reduction_layout.addWidget(self.chk_8bit, 3, 0, 1, 3)
+        
+        config_vbox.addWidget(reduction_group)
+        
+        # Memory Information
+        mem_group = QFrame()
+        mem_group.setStyleSheet("background-color: #1a2a33; border: 1px solid #34495e; border-radius: 4px; padding: 10px;")
+        mem_layout = QVBoxLayout(mem_group)
+        self.mem_info_label = QLabel("Memory: Ready to estimate...")
+        self.mem_info_label.setStyleSheet("font-size: 13px; color: #ecf0f1; font-family: 'Consolas', 'Monaco', monospace;")
+        mem_layout.addWidget(self.mem_info_label)
+        self.mem_status_label = QLabel("Status: Waiting for input")
+        self.mem_status_label.setStyleSheet("font-weight: bold; color: #95a5a6;")
+        mem_layout.addWidget(self.mem_status_label)
+        
+        config_vbox.addWidget(mem_group)
+        config_vbox.addStretch()
+        
+        center_row.addLayout(config_vbox, 1)
         layout.addLayout(center_row)
         
-        # Bottom: Actions
+        # 3. Actions
         btns = QHBoxLayout()
         btns.addStretch()
         btn_cancel = QPushButton("Cancel")
@@ -195,6 +248,15 @@ class ImportDialog(QDialog):
         btns.addWidget(self.btn_import)
         layout.addLayout(btns)
 
+    def create_group_frame(self, inner_layout, title):
+        frame = QFrame()
+        vbox = QVBoxLayout(frame)
+        title_lbl = QLabel(title.upper())
+        title_lbl.setStyleSheet("font-size: 10px; color: #888; margin-bottom: 2px;")
+        vbox.addWidget(title_lbl)
+        vbox.addLayout(inner_layout)
+        return frame
+
     def on_browse(self):
         path = QFileDialog.getExistingDirectory(self, "Select Volume Folder")
         if path:
@@ -203,19 +265,26 @@ class ImportDialog(QDialog):
             self.load_metadata()
 
     def load_metadata(self):
-        # Quick scan to get histogram and dimensions
         self.stats = self.core.volume_loader.get_quick_stats(self.folder_path)
         if self.stats:
             self.hist_widget.set_data(self.stats['histogram'], self.stats['bin_edges'])
+            
+            # Setup reduction controls
+            self.spin_z_start.setRange(0, self.stats['depth'] - 1)
+            self.spin_z_end.setRange(0, self.stats['depth'])
+            self.spin_z_start.setValue(0)
+            self.spin_z_end.setValue(self.stats['depth'])
+            
             self.slice_slider.setRange(0, self.stats['depth'] - 1)
             self.slice_slider.setValue(self.stats['depth'] // 2)
             self.slice_slider.setEnabled(True)
-            self.btn_import.setEnabled(True)
             
-            # Suggest a range if possible (e.g. min/max of samples)
+            # Suggest a range if possible
             self.hist_widget.lower_val = int(self.stats['min'])
             self.hist_widget.upper_val = int(self.stats['max'])
             self.on_range_changed(self.hist_widget.lower_val, self.hist_widget.upper_val)
+            
+            self.update_memory_info()
             self.update_preview()
         else:
             self.path_label.setText("Error: No TIFF files found in folder.")
@@ -225,6 +294,65 @@ class ImportDialog(QDialog):
         self.rescale_range = (lower, upper)
         self.range_info.setText(f"Selected Range: [{lower}, {upper}] -> [0, 65535]")
         self.update_preview()
+
+    def on_reduction_changed(self, _=None):
+        self.update_memory_info()
+        self.update_preview()
+
+    def update_memory_info(self):
+        if not self.stats: return
+        
+        # Get current settings
+        z0 = self.spin_z_start.value()
+        z1 = self.spin_z_end.value()
+        self.z_range = (z0, z1)
+        
+        bin_idx = self.combo_binning.currentIndex()
+        self.binning_factor = [1, 2, 4][bin_idx]
+        self.use_8bit = self.chk_8bit.isChecked()
+        
+        # Calculate reduced dimensions
+        orig_w = self.stats['width']
+        orig_h = self.stats['height']
+        orig_d = self.stats['depth']
+        
+        cur_d = max(0, z1 - z0)
+        cur_w = orig_w // self.binning_factor
+        cur_h = orig_h // self.binning_factor
+        cur_d = cur_d // self.binning_factor
+        
+        # Estimate memory
+        is_safe, estimated, available = self.core.volume_loader.check_memory_available(
+            cur_w, cur_h, cur_d, self.use_8bit
+        )
+        
+        # Update labels
+        info_text = (
+            f"Original: {orig_w}x{orig_h}x{orig_d} ({orig_w*orig_h*orig_d/1e9:.1f}B voxels)\n"
+            f"Reduced:  {cur_w}x{cur_h}x{cur_d} ({cur_w*cur_h*cur_d/1e6:.1f}M voxels)\n"
+            f"Estimated Load: {estimated/1e9:.2f} GB\n"
+            f"Free System RAM: {available/1e9:.2f} GB"
+        )
+        self.mem_info_label.setText(info_text)
+        
+        # Check Hardware Limits
+        max_limit = self.core.volume_renderer.max_texture_size
+        hw_warning = ""
+        if cur_w > max_limit or cur_h > max_limit or cur_d > max_limit:
+            hw_warning = f"\n⚠️ OVER GPU LIMIT ({max_limit})"
+            is_safe = False
+            
+        if is_safe:
+            self.mem_status_label.setText(f"Status: ✅ Safe to load{hw_warning}")
+            self.mem_status_label.setStyleSheet("color: #2ecc71; font-weight: bold;")
+            self.btn_import.setEnabled(True)
+        else:
+            if hw_warning:
+                 self.mem_status_label.setText(f"Status: ❌ Hardware Limit{hw_warning}")
+            else:
+                 self.mem_status_label.setText(f"Status: ❌ Critical: Memory Insufficient")
+            self.mem_status_label.setStyleSheet("color: #e74c3c; font-weight: bold;")
+            self.btn_import.setEnabled(False)
 
     def update_preview(self):
         if not self.stats: return

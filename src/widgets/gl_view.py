@@ -1,10 +1,13 @@
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QMouseEvent, QWheelEvent
+from PyQt6.QtGui import QMouseEvent, QWheelEvent, QAction
+from PyQt6.QtWidgets import QMenu
 import OpenGL.GL as gl
 import glm
 
 class GLViewWidget(QOpenGLWidget):
+    sig_save_request = pyqtSignal(str) # "single" or "all"
+    
     def __init__(self, core, mode="Axial", parent=None):
         super().__init__(parent)
         self.core = core
@@ -25,6 +28,9 @@ class GLViewWidget(QOpenGLWidget):
         # Initialize OpenGL state
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glClearColor(0.0, 0.0, 0.0, 1.0)
+        
+        # Query hardware limits
+        self.core.volume_renderer.query_limits()
         
         # Ensure shaders are loaded
         if self.core.slice_shader is None:
@@ -322,3 +328,16 @@ class GLViewWidget(QOpenGLWidget):
         ndc_x = (x / self.width()) * 2.0 - 1.0
         ndc_y = 1.0 - (y / self.height()) * 2.0
         return max(-1.0, min(1.0, ndc_x)), max(-1.0, min(1.0, ndc_y))
+
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        
+        save_this = QAction(f"Save This View ({self.mode})", self)
+        save_this.triggered.connect(lambda: self.sig_save_request.emit("single"))
+        
+        save_all = QAction("Save All Views (Composite)", self)
+        save_all.triggered.connect(lambda: self.sig_save_request.emit("all"))
+        
+        menu.addAction(save_this)
+        menu.addAction(save_all)
+        menu.exec(event.globalPos())

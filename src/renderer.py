@@ -64,6 +64,12 @@ class VolumeRenderer:
         self.texture_ids = {} # slot -> id
         self.tf_texture_ids = {} # slot -> id
         self.volume_dims = {0: (0, 0, 0), 1: (0, 0, 0)} # slot -> (W, H, D)
+        self.max_texture_size = 2048 # Default fallback
+
+    def query_limits(self):
+        """Queries OpenGL limits. Must be called after GL context is initialized."""
+        self.max_texture_size = gl.glGetIntegerv(gl.GL_MAX_3D_TEXTURE_SIZE)
+        print(f"OpenGL Max 3D Texture Size: {self.max_texture_size}")
 
     def create_texture(self, data, width, height, depth, slot=0):
         """
@@ -86,16 +92,24 @@ class VolumeRenderer:
         # Pixel storage mode for unpacking (alignment)
         gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
 
+        # Determine formats based on numpy dtype
+        if data.dtype == np.uint8:
+            internal_format = gl.GL_R8
+            pixel_type = gl.GL_UNSIGNED_BYTE
+        else:
+            internal_format = gl.GL_R16
+            pixel_type = gl.GL_UNSIGNED_SHORT
+
         gl.glTexImage3D(
             gl.GL_TEXTURE_3D,
             0,
-            gl.GL_R16,
+            internal_format,
             width,
             height,
             depth,
             0,
             gl.GL_RED,
-            gl.GL_UNSIGNED_SHORT,
+            pixel_type,
             data
         )
         self.volume_dims[slot] = (width, height, depth)

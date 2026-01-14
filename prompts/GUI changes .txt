@@ -1,0 +1,7 @@
+Task. 
+
+1) Move the user interface section for volume rendering from the left side to the right side of the user interface.
+2) set the maximum value for the density for cross sections to 1 and set the default value to 0.25
+3) remove the GUI button for direct loading of data. From now on we will only use the advanced import.
+
+

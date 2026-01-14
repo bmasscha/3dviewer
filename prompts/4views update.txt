@@ -1,0 +1,6 @@
+GUI tasks
+
+Now there are four views: three orthogonal slices and a volume rendering. This is very nice but sometimes the user wants to see only one view or two views. 
+Job: investigate how we can have a more advanced view selection. The default will of course be the 4 views. 
+
+Make a plan with two strategies from which I can choose one.

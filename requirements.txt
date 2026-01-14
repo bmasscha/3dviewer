@@ -7,3 +7,5 @@ Pillow
 PyGLM
 PyQt6
 acquila_zmq
+psutil
+scipy

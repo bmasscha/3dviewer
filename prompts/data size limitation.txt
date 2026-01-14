@@ -1,0 +1,8 @@
+Task:
+CT datasets can be very large. 10GB is not uncommon. Of course there is a limit to what we can import or load in the memory and probably also to what openGL can render. I would like you to investigate how we can:
+1) prevent user from loading datsets which are bigger than the systems free memory capacity. 
+2) how we can reduce the import data size (eg cropping or binning at import stage, U8/U16 variables for the volume.
+
+The output format is a plan.
+
+

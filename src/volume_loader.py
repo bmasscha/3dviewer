@@ -1,23 +1,37 @@
-import os
-import sys
 import glob
 import numpy as np
 import tifffile
+import psutil
+from scipy.ndimage import zoom
 
 class VolumeLoader:
     def __init__(self):
-        self.data = None
         self.width = 0
         self.height = 0
         self.depth = 0
 
-    def load_from_folder(self, folder_path, rescale_range=None):
+    def estimate_memory_usage(self, width, height, depth, use_8bit=False):
+        """Estimate memory usage in bytes for the volume and OpenGL texture."""
+        bytes_per_voxel = 1 if use_8bit else 2
+        volume_bytes = width * height * depth * bytes_per_voxel
+        # Estimate total impact including CPU array, OpenGL texture, and intermediate copies
+        return volume_bytes * 2.5
+
+    def check_memory_available(self, width, height, depth, use_8bit=False):
+        """Check if enough system memory is available."""
+        estimated = self.estimate_memory_usage(width, height, depth, use_8bit)
+        available = psutil.virtual_memory().available
+        # Allow use up to 80% of available RAM
+        return estimated < (available * 0.8), estimated, available
+
+    def load_from_folder(self, folder_path, rescale_range=None, z_range=None, binning_factor=1, use_8bit=False):
         """
-        Loads all .tif/.tiff files from the specified folder.
-        Files are sorted alphabetically to ensure correct sequence.
-        Returns the 3D numpy array (Z, Y, X) with uint16 dtype.
+        Loads .tif/.tiff files from the specified folder with optional reduction.
         
-        rescale_range: tuple (min, max) to rescale from to (0, 65535).
+        rescale_range: tuple (min, max) to rescale from to (0, 65535) or (0, 255).
+        z_range: tuple (start, end) of slice indices to load.
+        binning_factor: factor for spatial downsampling (e.g. 2 for 2x2x2).
+        use_8bit: if True, converts data to uint8.
         """
         # Find all tiff files
         extensions = ['*.tif', '*.tiff', '*.TIF', '*.TIFF']
@@ -44,36 +58,70 @@ class VolumeLoader:
         self.height, self.width = first_slice.shape
         self.depth = len(files)
 
+        # Apply Z-range cropping if requested
+        if z_range is not None:
+            z_start, z_end = z_range
+            z_start = max(0, z_start)
+            z_end = min(self.depth, z_end)
+            files = files[z_start:z_end]
+            self.depth = len(files)
+            print(f"Applied Z-range crop: {z_start} to {z_end}. Remaining depth: {self.depth}")
+
         print(f"Volume Dimensions: {self.width}x{self.height}x{self.depth}")
 
-        # Pre-allocate memory (16-bit) as requested
-        # Format: (Depth, Height, Width) - typical for numpy arrays of images
-        self.data = np.zeros((self.depth, self.height, self.width), dtype=np.uint16)
+        # Check memory
+        is_safe, estimated, available = self.check_memory_available(self.width, self.height, self.depth, use_8bit)
+        print(f"Memory Check: Estimated {estimated/1e9:.2f} GB, Available {available/1e9:.2f} GB")
+        if not is_safe:
+            print(f"CRITICAL: Insufficient memory to load dataset!")
+            # We skip hard error here for now to allow expert users to try, 
+            # but in UI we will block it.
 
-        # Load all slices
+        # Pre-allocate memory
+        target_dtype = np.uint8 if use_8bit else np.uint16
+        self.data = np.zeros((self.depth, self.height, self.width), dtype=target_dtype)
+
+        # Load slices
         for i, f in enumerate(files):
             try:
                 img = tifffile.imread(f)
                 if img.shape != (self.height, self.width):
-                    print(f"Warning: Slice {i} has different dimensions {img.shape}, resizing/skipping not implemented.")
+                    print(f"Warning: Slice {i} has different dimensions {img.shape}, skipping.")
                     continue
-                self.data[i] = img
+                
+                if use_8bit:
+                    # If we are loading as 8-bit but data is 16-bit, we need a preliminary rescale
+                    # or just cast if data is already in 0-255 range.
+                    # Usually we want to rescale based on full range if rescale_range is provided later,
+                    # but if not, we do a simple shift or cast.
+                    if img.dtype == np.uint16:
+                         self.data[i] = (img >> 8).astype(np.uint8)
+                    else:
+                         self.data[i] = img.astype(np.uint8)
+                else:
+                    self.data[i] = img
             except Exception as e:
                 print(f"Error reading slice {i} ({f}): {e}")
         
         # Rescale if requested
         if rescale_range is not None:
             lower, upper = rescale_range
-            print(f"Rescaling data from [{lower}, {upper}] to [0, 65535]...")
+            target_max = 255 if use_8bit else 65535
+            print(f"Rescaling data from [{lower}, {upper}] to [0, {target_max}]...")
             
-            # Use float32 for intermediate calculation to avoid overflow/underflow
-            # then clip and convert back to uint16
             data_f = self.data.astype(np.float32)
-            data_f = (data_f - lower) * 65535.0 / (upper - lower)
-            
-            # Clip to [0, 65535]
-            data_f = np.clip(data_f, 0, 65535)
-            self.data = data_f.astype(np.uint16)
+            data_f = (data_f - lower) * float(target_max) / (upper - lower)
+            data_f = np.clip(data_f, 0, target_max)
+            self.data = data_f.astype(target_dtype)
+
+        # Apply spatial binning if requested
+        if binning_factor > 1:
+            print(f"Applying spatial binning (factor {binning_factor})...")
+            # zoom expects (z, y, x)
+            scale = 1.0 / binning_factor
+            self.data = zoom(self.data, scale, order=1) # Linear interpolation
+            self.depth, self.height, self.width = self.data.shape
+            print(f"New Dimensions after binning: {self.width}x{self.height}x{self.depth}")
         
         # Calculate stats
         min_val = np.min(self.data)

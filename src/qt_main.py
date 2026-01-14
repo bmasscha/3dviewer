@@ -7,6 +7,8 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QPushButton, QComboBox, QFileDialog, QFrame,
                              QScrollArea, QLineEdit, QTextEdit)
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
+from PyQt6.QtGui import QImage, QPainter
+from datetime import datetime
 from app_core import AppCore
 from widgets.gl_view import GLViewWidget
 from widgets.tf_editor import TFEditorWidget
@@ -80,10 +82,10 @@ class MainWindow(QMainWindow):
         
         # Dataset Selection
         self.create_dataset_panel(left_sidebar)
-        
-        # Rendering Methods
-        self.create_rendering_panel(left_sidebar)
 
+        # View Layout Selection (NEW)
+        self.create_layout_panel(left_sidebar)
+        
         # Virtual Phase Contrast (Post-Processing)
         self.create_vpc_panel(left_sidebar)
         
@@ -101,32 +103,50 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(left_scroll, 1)
 
         # --- Center Grid (Viewports) ---
-        grid_layout = QGridLayout()
-        grid_layout.setSpacing(5)
+        self.grid_layout = QGridLayout()
+        self.grid_layout.setSpacing(5)
         
         self.view_axial = GLViewWidget(self.core, "Axial")
         self.view_coronal = GLViewWidget(self.core, "Coronal")
         self.view_sagittal = GLViewWidget(self.core, "Sagittal")
         self.view_3d = GLViewWidget(self.core, "3D")
         
-        grid_layout.addWidget(self.view_axial, 0, 0)
-        grid_layout.addWidget(self.view_sagittal, 0, 1) # Match drawing: Axial, Sagittal
-        grid_layout.addWidget(self.view_coronal, 1, 0)
-        grid_layout.addWidget(self.view_3d, 1, 1)
+        self.grid_layout.addWidget(self.view_axial, 0, 0)
+        self.grid_layout.addWidget(self.view_sagittal, 0, 1) # Match drawing: Axial, Sagittal
+        self.grid_layout.addWidget(self.view_coronal, 1, 0)
+        self.grid_layout.addWidget(self.view_3d, 1, 1)
+        
+        # Connect save signals
+        for view in [self.view_axial, self.view_coronal, self.view_sagittal, self.view_3d]:
+            view.sig_save_request.connect(lambda mode, v=view: self.on_request_save_view(v, mode))
         
         # Set titles for views
-        self.add_viewport_overlay(grid_layout, "Axial", 0, 0)
-        self.add_viewport_overlay(grid_layout, "Sagittal", 0, 1)
-        self.add_viewport_overlay(grid_layout, "Coronal", 1, 0)
-        self.add_viewport_overlay(grid_layout, "Rendering (3D)", 1, 1)
+        self.add_viewport_overlay(self.grid_layout, "Axial", 0, 0)
+        self.add_viewport_overlay(self.grid_layout, "Sagittal", 0, 1)
+        self.add_viewport_overlay(self.grid_layout, "Coronal", 1, 0)
+        self.add_viewport_overlay(self.grid_layout, "Rendering (3D)", 1, 1)
 
-        main_layout.addLayout(grid_layout, 4)
+        main_layout.addLayout(self.grid_layout, 4)
 
         # --- Right Sidebar ---
-        right_sidebar = QVBoxLayout()
+        right_widget = QWidget()
+        right_sidebar = QVBoxLayout(right_widget)
+        right_sidebar.setSpacing(15)
+        right_sidebar.setContentsMargins(10, 0, 0, 0)
+
+        # Rendering Methods (Moved from left)
+        self.create_rendering_panel(right_sidebar)
+
         self.create_tf_panel(right_sidebar)
         right_sidebar.addStretch()
-        main_layout.addLayout(right_sidebar, 1)
+        
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        right_scroll.setWidget(right_widget)
+        
+        main_layout.addWidget(right_scroll, 1)
 
     def add_viewport_overlay(self, layout, text, r, c):
         # This is a bit tricky with QGridLayout, let's just use labels inside the widgets area for now
@@ -322,6 +342,142 @@ class MainWindow(QMainWindow):
         self.core.camera.fov = float(val)
         self.update_views()
 
+    def on_request_save_view(self, source_view, mode):
+        """Handles saving one or all views to an image file."""
+        # 1. Determine base path
+        base_path = self.core.current_dataset_path
+        if not base_path or not os.path.isdir(base_path):
+            # Fallback to current working directory if no dataset loaded
+            base_path = os.getcwd()
+            
+        # 2. Ensure "images" folder exists
+        img_dir = os.path.join(base_path, "images")
+        try:
+            os.makedirs(img_dir, exist_ok=True)
+        except Exception as e:
+            logging.error(f"Failed to create images directory: {e}")
+            img_dir = base_path # Fallback
+            
+        # 3. Generate default filename
+        now = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_name = f"{now}.png"
+        full_suggested_path = os.path.join(img_dir, default_name)
+        
+        # 4. Ask user for path and name
+        save_path, selected_filter = QFileDialog.getSaveFileName(
+            self, "Save View as Image", full_suggested_path, 
+            "PNG Files (*.png);;JPEG Files (*.jpg *.jpeg)"
+        )
+        
+        if not save_path:
+            return
+            
+        try:
+            if mode == "single":
+                # Grab just this viewport
+                pixmap = source_view.grabFramebuffer()
+                pixmap.save(save_path)
+            else:
+                # Grab all 4 viewports and compose
+                img_axial = self.view_axial.grabFramebuffer()
+                img_sag = self.view_sagittal.grabFramebuffer()
+                img_cor = self.view_coronal.grabFramebuffer()
+                img_3d = self.view_3d.grabFramebuffer()
+                
+                # Composition (2x2)
+                w, h = img_axial.width(), img_axial.height()
+                combined = QImage(w * 2, h * 2, QImage.Format.Format_ARGB32)
+                painter = QPainter(combined)
+                painter.drawImage(0, 0, img_axial)
+                painter.drawImage(w, 0, img_sag)
+                painter.drawImage(0, h, img_cor)
+                painter.drawImage(w, h, img_3d)
+                painter.end()
+                
+                combined.save(save_path)
+                
+            logging.info(f"Image saved to: {save_path}")
+            # Show a brief status message if possible, but logging is fine for now
+        except Exception as e:
+            logging.error(f"Failed to save image: {e}")
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Save Error", f"Could not save image: {str(e)}")
+
+    def create_layout_panel(self, layout):
+        container = QFrame()
+        container.setObjectName("SidePanel")
+        vbox = QVBoxLayout(container)
+        
+        title = QLabel("VIEW LAYOUT")
+        title.setObjectName("PanelTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        vbox.addWidget(title)
+        
+        layout_grid = QGridLayout()
+        
+        presets = [
+            ("Grid (2x2)", "Grid"),
+            ("Axial Only", "Axial"),
+            ("Coronal Only", "Coronal"),
+            ("Sagittal Only", "Sagittal"),
+            ("3D View Only", "3D"),
+            ("Axial + 3D", "Dual_A3")
+        ]
+        
+        for i, (label, mode) in enumerate(presets):
+            btn = QPushButton(label)
+            btn.clicked.connect(lambda checked, m=mode: self.set_view_layout(m))
+            layout_grid.addWidget(btn, i // 2, i % 2)
+            
+        vbox.addLayout(layout_grid)
+        layout.addWidget(container)
+
+    def set_view_layout(self, mode):
+        """Changes the viewport arrangement."""
+        # Hide all first
+        self.view_axial.hide()
+        self.view_coronal.hide()
+        self.view_sagittal.hide()
+        self.view_3d.hide()
+        
+        # We also need to hide/show viewport labels if we decide to implement them properly.
+        # Currently, add_viewport_overlay is just a placeholder.
+        
+        # Clear existing widgets from the grid layout
+        for i in reversed(range(self.grid_layout.count())): 
+            widget = self.grid_layout.itemAt(i).widget()
+            if widget:
+                widget.setParent(None) # Remove from layout but don't delete widget
+        
+        if mode == "Grid":
+            self.grid_layout.addWidget(self.view_axial, 0, 0)
+            self.grid_layout.addWidget(self.view_sagittal, 0, 1)
+            self.grid_layout.addWidget(self.view_coronal, 1, 0)
+            self.grid_layout.addWidget(self.view_3d, 1, 1)
+            self.view_axial.show()
+            self.view_coronal.show()
+            self.view_sagittal.show()
+            self.view_3d.show()
+        elif mode == "Axial":
+            self.grid_layout.addWidget(self.view_axial, 0, 0, 2, 2)
+            self.view_axial.show()
+        elif mode == "Coronal":
+            self.grid_layout.addWidget(self.view_coronal, 0, 0, 2, 2)
+            self.view_coronal.show()
+        elif mode == "Sagittal":
+            self.grid_layout.addWidget(self.view_sagittal, 0, 0, 2, 2)
+            self.view_sagittal.show()
+        elif mode == "3D":
+            self.grid_layout.addWidget(self.view_3d, 0, 0, 2, 2)
+            self.view_3d.show()
+        elif mode == "Dual_A3":
+            self.grid_layout.addWidget(self.view_axial, 0, 0, 2, 1)
+            self.grid_layout.addWidget(self.view_3d, 0, 1, 2, 1)
+            self.view_axial.show()
+            self.view_3d.show()
+            
+        logging.info(f"Layout changed to: {mode}")
+
     def create_dataset_panel(self, layout):
         container = QFrame()
         container.setObjectName("SidePanel")
@@ -339,11 +495,6 @@ class MainWindow(QMainWindow):
         btn_browse = QPushButton("Browse Folder")
         btn_browse.clicked.connect(self.on_browse)
         vbox.addWidget(btn_browse)
-        
-        btn_load = QPushButton("Load Dataset")
-        btn_load.clicked.connect(self.on_load)
-        btn_load.setObjectName("PrimaryButton")
-        vbox.addWidget(btn_load)
         
         btn_import_adv = QPushButton("Import Advanced...")
         btn_import_adv.clicked.connect(self.on_import_advanced)
@@ -363,8 +514,8 @@ class MainWindow(QMainWindow):
         
         # Density
         self.slider_density, self.label_density = self.create_labeled_slider(
-            vbox, "Slice Density", 1, 50, int(self.core.slice_density * 10), 
-            self.on_density_changed, transform=lambda v: f"{v/10.0:.1f}"
+            vbox, "Slice Density", 1, 10, int(self.core.slice_density * 10), 
+            self.on_density_changed, transform=lambda v: f"{v/10.0:.2f}"
         )
 
         
@@ -766,8 +917,13 @@ class MainWindow(QMainWindow):
         if diag.exec():
             folder = diag.folder_path
             rescale_range = diag.rescale_range
+            z_range = diag.z_range
+            binning_factor = diag.binning_factor
+            use_8bit = diag.use_8bit
             
-            if self.core.load_dataset(folder, rescale_range=rescale_range):
+            if self.core.load_dataset(folder, rescale_range=rescale_range, 
+                                      z_range=z_range, binning_factor=binning_factor, 
+                                      use_8bit=use_8bit):
                 # Update slider ranges
                 vol_w, vol_h, vol_d = self.core.volume_renderer.volume_dims[0]
                 for s, m in [(self.slider_x, vol_w), (self.slider_y, vol_h), (self.slider_z, vol_d)]:
