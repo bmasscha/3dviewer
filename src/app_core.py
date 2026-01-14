@@ -98,14 +98,15 @@ class AppCore:
             print(f"Failed to load shaders: {e}")
             return False
 
-    def load_dataset(self, folder_path, is_overlay=False, rescale_range=None, z_range=None, binning_factor=1, use_8bit=False):
+    def load_dataset(self, folder_path, is_overlay=False, rescale_range=None, z_range=None, binning_factor=1, use_8bit=False, progress_callback=None):
         if os.path.exists(folder_path):
             data = self.volume_loader.load_from_folder(
                 folder_path, 
                 rescale_range=rescale_range,
                 z_range=z_range,
                 binning_factor=binning_factor,
-                use_8bit=use_8bit
+                use_8bit=use_8bit,
+                progress_callback=progress_callback
             )
             if data is not None:
                 d, h, w = data.shape

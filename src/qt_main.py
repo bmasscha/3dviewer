@@ -5,7 +5,7 @@ import logging
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QGridLayout, QLabel, QSlider, 
                              QPushButton, QComboBox, QFileDialog, QFrame,
-                             QScrollArea, QLineEdit, QTextEdit)
+                             QScrollArea, QLineEdit, QTextEdit, QProgressDialog)
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QImage, QPainter
 from datetime import datetime
@@ -488,17 +488,15 @@ class MainWindow(QMainWindow):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         vbox.addWidget(title)
         
-        self.folder_label = QLabel("No folder selected")
-        self.folder_label.setWordWrap(True)
-        vbox.addWidget(self.folder_label)
-        
-        btn_browse = QPushButton("Browse Folder")
-        btn_browse.clicked.connect(self.on_browse)
-        vbox.addWidget(btn_browse)
-        
         btn_import_adv = QPushButton("Import Advanced...")
         btn_import_adv.clicked.connect(self.on_import_advanced)
         vbox.addWidget(btn_import_adv)
+        
+        # Label to show current dataset folder
+        self.folder_label = QLabel("No dataset loaded")
+        self.folder_label.setWordWrap(True)
+        self.folder_label.setStyleSheet("font-size: 10px; color: #888888; padding: 5px;")
+        vbox.addWidget(self.folder_label)
         
         layout.addWidget(container)
 
@@ -921,9 +919,28 @@ class MainWindow(QMainWindow):
             binning_factor = diag.binning_factor
             use_8bit = diag.use_8bit
             
-            if self.core.load_dataset(folder, rescale_range=rescale_range, 
-                                      z_range=z_range, binning_factor=binning_factor, 
-                                      use_8bit=use_8bit):
+            # Show progress dialog for potentially long operation
+            progress = QProgressDialog("Initializing...", "Cancel", 0, 0, self)
+            progress.setWindowTitle("Import Progress")
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
+            progress.setMinimumDuration(0)  # Show immediately
+            progress.setCancelButton(None)  # No cancel button
+            progress.setRange(0, 0)  # Indeterminate progress
+            progress.show()
+            
+            # Callback to update progress
+            def update_progress(message):
+                progress.setLabelText(message)
+                QApplication.processEvents()
+            
+            try:
+                success = self.core.load_dataset(folder, rescale_range=rescale_range, 
+                                          z_range=z_range, binning_factor=binning_factor, 
+                                          use_8bit=use_8bit, progress_callback=update_progress)
+            finally:
+                progress.close()
+            
+            if success:
                 # Update slider ranges
                 vol_w, vol_h, vol_d = self.core.volume_renderer.volume_dims[0]
                 for s, m in [(self.slider_x, vol_w), (self.slider_y, vol_h), (self.slider_z, vol_d)]:
@@ -998,7 +1015,14 @@ class MainWindow(QMainWindow):
     def apply_stylesheet(self):
         self.setStyleSheet("""
             QMainWindow {
-                background-color: #121212;
+                background-color: #0D0D0D;
+            }
+            QWidget {
+                background-color: #0D0D0D;
+            }
+            QScrollArea {
+                background-color: #0D0D0D;
+                border: none;
             }
             QLabel {
                 color: #E0E0E0;
@@ -1014,10 +1038,11 @@ class MainWindow(QMainWindow):
                 margin-bottom: 5px;
             }
             #SidePanel {
-                background-color: #1E1E1E;
-                border: 1px solid #333333;
+                background-color: #1A1A1A;
+                border: 1px solid #2A2A2A;
                 border-radius: 5px;
                 padding: 10px;
+                margin-bottom: 5px;
             }
             QPushButton {
                 background-color: #3D3D3D;
@@ -1047,6 +1072,40 @@ class MainWindow(QMainWindow):
                 border: 1px solid #3498DB;
                 padding: 5px;
                 border-radius: 3px;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 5px solid white;
+                margin-right: 5px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #2C3E50;
+                color: white;
+                selection-background-color: #3498DB;
+                selection-color: white;
+                border: 1px solid #3498DB;
+            }
+            QMenu {
+                background-color: #2C3E50;
+                color: white;
+                border: 1px solid #3498DB;
+            }
+            QMenu::item {
+                background-color: transparent;
+                padding: 5px 25px 5px 20px;
+            }
+            QMenu::item:selected {
+                background-color: #3498DB;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #555;
+                margin: 5px 0px 5px 0px;
             }
         """)
 

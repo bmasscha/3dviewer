@@ -2,7 +2,8 @@ import os
 import numpy as np
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QFileDialog, QSlider, QFrame, QSizePolicy,
-                             QComboBox, QCheckBox, QSpinBox, QGridLayout)
+                             QComboBox, QCheckBox, QSpinBox, QGridLayout, QProgressDialog,
+                             QApplication)
 from PyQt6.QtCore import Qt, pyqtSignal, QRect, QPoint, QSize
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QImage, QPixmap
 import psutil
@@ -392,4 +393,12 @@ class ImportDialog(QDialog):
             QPushButton:disabled { color: #666; background-color: #222; }
             #PrimaryButton { background-color: #E74C3C; font-weight: bold; border-color: #C0392B; }
             #PrimaryButton:hover { background-color: #C0392B; }
+            QComboBox { background-color: #2C3E50; color: white; border: 1px solid #3498DB; padding: 5px; border-radius: 3px; }
+            QComboBox::drop-down { border: none; }
+            QComboBox::down-arrow { image: none; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 6px solid white; width: 0; height: 0; margin-right: 6px; }
+            QComboBox QAbstractItemView { background-color: #2C3E50; color: white; selection-background-color: #3498DB; selection-color: white; border: 1px solid #3498DB; }
+            QSpinBox { background-color: #2C3E50; color: white; border: 1px solid #3498DB; padding: 3px; border-radius: 3px; }
+            QCheckBox { color: white; spacing: 5px; }
+            QCheckBox::indicator { width: 18px; height: 18px; border: 1px solid #555; border-radius: 3px; background-color: #2C3E50; }
+            QCheckBox::indicator:checked { background-color: #3498DB; border-color: #3498DB; }
         """)

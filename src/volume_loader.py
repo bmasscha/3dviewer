@@ -27,7 +27,7 @@ class VolumeLoader:
         # Allow use up to 80% of available RAM
         return estimated < (available * 0.8), estimated, available
 
-    def load_from_folder(self, folder_path, rescale_range=None, z_range=None, binning_factor=1, use_8bit=False):
+    def load_from_folder(self, folder_path, rescale_range=None, z_range=None, binning_factor=1, use_8bit=False, progress_callback=None):
         """
         Loads .tif/.tiff files from the specified folder with optional reduction.
         
@@ -35,6 +35,7 @@ class VolumeLoader:
         z_range: tuple (start, end) of slice indices to load.
         binning_factor: factor for spatial downsampling (e.g. 2 for 2x2x2).
         use_8bit: if True, converts data to uint8.
+        progress_callback: optional function(message) to call for progress updates.
         """
         # Find all tiff files
         extensions = ['*.tif', '*.tiff', '*.TIF', '*.TIFF']
@@ -81,34 +82,52 @@ class VolumeLoader:
             # but in UI we will block it.
 
         # Pre-allocate memory
-        target_dtype = np.uint8 if use_8bit else np.uint16
-        self.data = np.zeros((self.depth, self.height, self.width), dtype=target_dtype)
+        # If rescaling will be applied, we need to load in original dtype first, then rescale
+        # Otherwise we can load directly into target dtype
+        if rescale_range is not None:
+            # Load as original dtype, will convert after rescaling
+            load_dtype = None  # Will be inferred from the data
+            self.data = []  # Use list temporarily
+        else:
+            # No rescaling, load directly to target dtype
+            target_dtype = np.uint8 if use_8bit else np.uint16
+            self.data = np.zeros((self.depth, self.height, self.width), dtype=target_dtype)
 
         # Load slices
         for i, f in enumerate(files):
+            # Report progress every 10 slices
+            if progress_callback and i % 10 == 0:
+                progress_callback(f"Loading slice {i+1}/{self.depth}...")
+            
             try:
                 img = tifffile.imread(f)
                 if img.shape != (self.height, self.width):
                     print(f"Warning: Slice {i} has different dimensions {img.shape}, skipping.")
                     continue
                 
-                if use_8bit:
-                    # If we are loading as 8-bit but data is 16-bit, we need a preliminary rescale
-                    # or just cast if data is already in 0-255 range.
-                    # Usually we want to rescale based on full range if rescale_range is provided later,
-                    # but if not, we do a simple shift or cast.
-                    if img.dtype == np.uint16:
-                         self.data[i] = (img >> 8).astype(np.uint8)
-                    else:
-                         self.data[i] = img.astype(np.uint8)
+                if rescale_range is not None:
+                    # Keep original dtype for rescaling
+                    self.data.append(img)
                 else:
-                    self.data[i] = img
+                    # No rescaling - convert to target dtype immediately
+                    if use_8bit:
+                        if img.dtype == np.uint16:
+                            self.data[i] = (img >> 8).astype(np.uint8)
+                        else:
+                            self.data[i] = img.astype(np.uint8)
+                    else:
+                        self.data[i] = img
             except Exception as e:
                 print(f"Error reading slice {i} ({f}): {e}")
+        
+        # Convert list to array if we were collecting for rescaling
+        if rescale_range is not None:
+            self.data = np.array(self.data)
         
         # Rescale if requested
         if rescale_range is not None:
             lower, upper = rescale_range
+            target_dtype = np.uint8 if use_8bit else np.uint16
             target_max = 255 if use_8bit else 65535
             print(f"Rescaling data from [{lower}, {upper}] to [0, {target_max}]...")
             
@@ -119,6 +138,8 @@ class VolumeLoader:
 
         # Apply spatial binning if requested
         if binning_factor > 1:
+            if progress_callback:
+                progress_callback(f"Applying {binning_factor}x{binning_factor}x{binning_factor} binning...")
             print(f"Applying spatial binning (factor {binning_factor})...")
             # zoom expects (z, y, x)
             scale = 1.0 / binning_factor
