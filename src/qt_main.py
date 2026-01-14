@@ -5,7 +5,8 @@ import logging
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QGridLayout, QLabel, QSlider, 
                              QPushButton, QComboBox, QFileDialog, QFrame,
-                             QScrollArea, QLineEdit, QTextEdit, QProgressDialog)
+                             QScrollArea, QLineEdit, QTextEdit, QProgressDialog,
+                             QStackedLayout, QDoubleSpinBox, QSpinBox, QMessageBox)
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QImage, QPainter
 from datetime import datetime
@@ -20,6 +21,58 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+
+class LoadVolumeThread(QThread):
+    progress = pyqtSignal(str)
+    finished = pyqtSignal(object)
+    
+    def __init__(self, loader, folder_path, **kwargs):
+        super().__init__()
+        self.loader = loader
+        self.folder_path = folder_path
+        self.kwargs = kwargs
+        
+    def run(self):
+        def progress_cb(msg):
+            self.progress.emit(msg)
+            
+        try:
+            data = self.loader.load_from_folder(self.folder_path, progress_callback=progress_cb, **self.kwargs)
+            self.finished.emit(data)
+        except Exception as e:
+            self.finished.emit(None) # Signal failure
+
+class FilterWorker(QThread):
+    progress = pyqtSignal(int)
+    finished = pyqtSignal(bool, str)
+    
+    def __init__(self, core, filter_name, params):
+        super().__init__()
+        self.core = core
+        self.filter_name = filter_name
+        self.params = params
+        self.is_cancelled = False
+        
+    def run(self):
+        def check_cancel():
+            return self.is_cancelled
+            
+        def on_progress(val):
+            self.progress.emit(val)
+            
+        try:
+            success, msg = self.core.apply_filter(
+                self.filter_name, 
+                progress_callback=on_progress, 
+                check_cancel=check_cancel, 
+                **self.params
+            )
+            self.finished.emit(success, msg)
+        except Exception as e:
+            self.finished.emit(False, str(e))
+        
+    def cancel(self):
+        self.is_cancelled = True
 
 class AIWorker(QThread):
     finished = pyqtSignal(object, str) # returns (action_dict, response_msg)
@@ -95,6 +148,9 @@ class MainWindow(QMainWindow):
 
         # Clipping Controls
         self.create_clipping_panel(left_sidebar)
+
+        # Noise Filter
+        self.create_filter_panel(left_sidebar)
 
         # Command Control
         self.create_command_panel(left_sidebar)
@@ -588,6 +644,211 @@ class MainWindow(QMainWindow):
         layout.addWidget(slider)
         return slider, val_label
 
+
+        layout.addWidget(container)
+
+    def create_filter_panel(self, layout):
+        container = QFrame()
+        container.setObjectName("SidePanel")
+        vbox = QVBoxLayout(container)
+        
+        title = QLabel("NOISE FILTER")
+        title.setObjectName("PanelTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        vbox.addWidget(title)
+        
+        self.combo_filter_type = QComboBox()
+        self.combo_filter_type.addItems(["Gaussian", "Median", "Bilateral", "NLM", "Total Variation"])
+        self.combo_filter_type.currentIndexChanged.connect(self.on_filter_type_changed)
+        vbox.addWidget(self.combo_filter_type)
+        
+        # Stacked Widget for Parameters
+        self.stack_filter_params = QStackedLayout()
+        
+        # 1. Gaussian Params
+        page_gaussian = QWidget()
+        layout_gaussian = QVBoxLayout(page_gaussian)
+        layout_gaussian.setContentsMargins(0, 5, 0, 5)
+        
+        row_sigma = QHBoxLayout()
+        row_sigma.addWidget(QLabel("Sigma:"))
+        self.spin_sigma = QDoubleSpinBox()
+        self.spin_sigma.setRange(0.1, 5.0)
+        self.spin_sigma.setSingleStep(0.1)
+        self.spin_sigma.setValue(1.0)
+        row_sigma.addWidget(self.spin_sigma)
+        layout_gaussian.addLayout(row_sigma)
+        
+        # 2. Median Params
+        page_median = QWidget()
+        layout_median = QVBoxLayout(page_median)
+        layout_median.setContentsMargins(0, 5, 0, 5)
+        
+        row_size = QHBoxLayout()
+        row_size.addWidget(QLabel("Size:"))
+        self.spin_median_size = QSpinBox()
+        self.spin_median_size.setRange(2, 10)
+        self.spin_median_size.setSingleStep(1)
+        self.spin_median_size.setValue(3)
+        row_size.addWidget(self.spin_median_size)
+        layout_median.addLayout(row_size)
+        
+        # Create a placeholder widget to hold the stacked layout because QStackedLayout cannot be added directly to QVBoxLayout
+        # Wait, QStackedLayout is a layout, not a widget. We need a container widget.
+        # Actually simplest is just to add the pages to a QStackedWidget
+        from PyQt6.QtWidgets import QStackedWidget
+        # Filter Settings Stack
+        self.stack_widget = QStackedWidget()
+        self.stack_widget.setStyleSheet("""
+            QDoubleSpinBox, QSpinBox {
+                color: #FFFFFF;
+                background-color: #333333;
+                border: 1px solid #555555;
+                padding: 2px;
+                border-radius: 3px;
+            }
+            QLabel {
+                color: #DDDDDD;
+            }
+        """)
+        self.stack_widget.addWidget(page_gaussian)
+        self.stack_widget.addWidget(page_median)
+        
+        # 3. Bilateral Params
+        page_bilateral = QWidget()
+        layout_bilateral = QVBoxLayout(page_bilateral)
+        layout_bilateral.setContentsMargins(0, 5, 0, 5)
+        
+        row_bi_spatial = QHBoxLayout()
+        row_bi_spatial.addWidget(QLabel("Sigma Spatial:"))
+        self.spin_bi_spatial = QDoubleSpinBox()
+        self.spin_bi_spatial.setRange(0.1, 10.0)
+        self.spin_bi_spatial.setValue(1.0)
+        self.spin_bi_spatial.setSingleStep(0.1)
+        row_bi_spatial.addWidget(self.spin_bi_spatial)
+        layout_bilateral.addLayout(row_bi_spatial)
+        
+        row_bi_color = QHBoxLayout()
+        row_bi_color.addWidget(QLabel("Sigma Color:"))
+        self.spin_bi_color = QDoubleSpinBox()
+        self.spin_bi_color.setRange(0.01, 1.0)
+        self.spin_bi_color.setValue(0.05)
+        self.spin_bi_color.setSingleStep(0.01)
+        row_bi_color.addWidget(self.spin_bi_color)
+        layout_bilateral.addLayout(row_bi_color)
+        self.stack_widget.addWidget(page_bilateral)
+
+        # 4. NLM Params
+        page_nlm = QWidget()
+        layout_nlm = QVBoxLayout(page_nlm)
+        layout_nlm.setContentsMargins(0, 5, 0, 5)
+        
+        row_nlm_h = QHBoxLayout()
+        row_nlm_h.addWidget(QLabel("h (Smooth):"))
+        self.spin_nlm_h = QDoubleSpinBox()
+        self.spin_nlm_h.setRange(0.1, 5.0)
+        self.spin_nlm_h.setValue(1.15)
+        self.spin_nlm_h.setSingleStep(0.05)
+        row_nlm_h.addWidget(self.spin_nlm_h)
+        layout_nlm.addLayout(row_nlm_h)
+        self.stack_widget.addWidget(page_nlm)
+
+        # 5. TV Params
+        page_tv = QWidget()
+        layout_tv = QVBoxLayout(page_tv)
+        layout_tv.setContentsMargins(0, 5, 0, 5)
+        
+        row_tv_w = QHBoxLayout()
+        row_tv_w.addWidget(QLabel("Weight:"))
+        self.spin_tv_weight = QDoubleSpinBox()
+        self.spin_tv_weight.setRange(0.01, 1.0)
+        self.spin_tv_weight.setValue(0.1)
+        self.spin_tv_weight.setSingleStep(0.01)
+        row_tv_w.addWidget(self.spin_tv_weight)
+        layout_tv.addLayout(row_tv_w)
+        self.stack_widget.addWidget(page_tv)
+        
+        self.stack_widget.setFixedHeight(80) # Increased height for more params
+        
+        vbox.addWidget(self.stack_widget)
+        
+        # Apply Button
+        self.btn_apply_filter = QPushButton("Apply Filter (CPU)")
+        self.btn_apply_filter.clicked.connect(self.on_apply_filter)
+        self.btn_apply_filter.setStyleSheet("background-color: #E67E22; color: white; font-weight: bold;")
+        vbox.addWidget(self.btn_apply_filter)
+        
+        layout.addWidget(container)
+
+    def on_filter_type_changed(self, index):
+        self.stack_widget.setCurrentIndex(index)
+
+    def on_apply_filter(self):
+        filter_name = self.combo_filter_type.currentText()
+        params = {}
+        
+        if filter_name == "Gaussian":
+            params['sigma'] = self.spin_sigma.value()
+        elif filter_name == "Median":
+            # Ensure odd size for median usually, but scipy handles it. 
+            # Scipy median_filter footprint is size^ndim. 
+            # If user picks even, it still works but behavior at center might be shifted. 
+            # We'll just pass it.
+            params['size'] = self.spin_median_size.value()
+        elif filter_name == "Bilateral":
+            params['sigma_spatial'] = self.spin_bi_spatial.value()
+            params['sigma_color'] = self.spin_bi_color.value()
+        elif filter_name == "NLM":
+            params['h'] = self.spin_nlm_h.value()
+            # Hardcoded mostly for simplicity in UI, but could expose
+            params['patch_size'] = 5 
+            params['patch_distance'] = 6
+        elif filter_name == "Total Variation":
+            params['weight'] = self.spin_tv_weight.value()
+            
+        # Confirm with user
+        ret = QMessageBox.question(self, "Apply Filter", 
+                                   f"This will apply {filter_name} filter on CPU.\n"
+                                   "It may take a few seconds/minutes depending on volume size.\n"
+                                   "Current data will be modified.\n\nContinue?",
+                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        
+        if ret != QMessageBox.StandardButton.Yes:
+            return
+
+        # Show Progress Dialog
+        self.progress_dialog = QProgressDialog("Applying Filter...", "Cancel", 0, 100, self)
+        self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        self.progress_dialog.setMinimumDuration(0)
+        self.progress_dialog.setAutoClose(False) # We will close it manually
+        self.progress_dialog.setAutoReset(False)
+        
+        # Setup Worker
+        self.worker = FilterWorker(self.core, filter_name, params)
+        self.worker.progress.connect(self.progress_dialog.setValue)
+        self.worker.finished.connect(self.on_filter_finished)
+        
+        # Connect Cancel
+        # When user clicks Cancel button on dialog, it emits canceled()
+        self.progress_dialog.canceled.connect(self.worker.cancel)
+        
+        self.worker.start()
+        
+    def on_filter_finished(self, success, msg):
+        self.progress_dialog.close()
+        
+        if success:
+            # Update the OpenGL texture on the main thread
+            self.core.update_render_texture()
+            self.update_views()
+            QMessageBox.information(self, "Filter Result", msg)
+            logging.info(msg)
+        else:
+            if "cancelled" in msg:
+                QMessageBox.information(self, "Cancelled", msg)
+            else:
+                QMessageBox.warning(self, "Failed", msg)
+            logging.warning(msg)
 
     def create_command_panel(self, layout):
         container = QFrame()

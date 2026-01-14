@@ -1,0 +1,16 @@
+c:\code\antigravity\3dviewer\.venv\Scripts\python : INFO:root:Applying Bilateral filter with sigma_spatial=2.0
+, sigma_color=0.1...
+At line:1 char:1
++ c:\code\antigravity\3dviewer\.venv\Scripts\python c:\code\antigravity ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (INFO:root:Apply...ma_color=0.1...:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+INFO:root:Applying NLM filter with h=1.15, patch_size=3, patch_distance=3...
+INFO:root:Estimated sigma (approx): 0.05977444803338498
+INFO:root:Applying TV filter with weight=0.1...
+Bilateral: Std IN=503.37, Std OUT=464.70
+Bilateral filter passed (Range Preserved).
+NLM filter passed.
+TV filter passed.
+All filter tests passed!

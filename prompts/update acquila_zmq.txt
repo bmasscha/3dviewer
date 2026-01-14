@@ -1,0 +1,11 @@
+Task update the acquila_zmq client in 3dviewer.
+
+run all commands in the 3dviewer venv. 
+acquila_zmq can be found on github: https://github.com/bmasscha/acquila_zmq.git
+Update the library. Reinstall the library.
+
+Test if our code still compiles.
+
+
+
+

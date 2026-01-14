@@ -1,0 +1,10 @@
+Name: acquila_zmq
+Version: 1.0.1
+Summary: A ZMQ-based communication library for Acquila components
+Home-page: https://github.com/bmasscha/acquila_zmq
+Author: Acquila Team
+Author-email: 
+License: MIT
+Location: C:\code\antigravity\3dviewer\.venv\Lib\site-packages
+Requires: pyzmq
+Required-by: 

@@ -1,0 +1,11 @@
+Task add 3d noise filter to the 3dviewer
+
+Always work in the 3dviewer venv
+Investigate possible candidates for a 3d noise filter
+Select two candidates and implement them in the 3dviewer
+Present the noise filter to the user in the GUI of the 3dviewer. Allow the user to select the noise filter and apply it to the 3d volume.
+
+Make a plan of how we will approach this task: Which libraries are necessary? Is this to be done on the gpu or on the cpu? Once filtered, there is no way back to the original data, or not?
+
+
+

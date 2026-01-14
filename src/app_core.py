@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 import numpy as np
 import glm
 from volume_loader import VolumeLoader
@@ -7,6 +8,7 @@ from renderer import VolumeRenderer, ShaderProgram
 from camera import Camera
 import transfer_functions
 from command_interpreter import CommandInterpreter
+import filters
 
 class AppCore:
     def __init__(self):
@@ -115,6 +117,7 @@ class AppCore:
                 
                 if not is_overlay:
                     self.current_dataset_path = folder_path
+                    self.current_volume_data = data # Store for CPU processing
                     self.slice_indices = [w//2, h//2, d//2]
                     # Update camera target to center of volume
                     box_size = self.get_box_size(slot=0)
@@ -125,6 +128,7 @@ class AppCore:
                     self.update_tf_texture(slot=0)
                 else:
                     self.has_overlay = True
+                    self.overlay_volume_data = data # Store for CPU processing
                     self.update_tf_texture(slot=1)
                     w2, h2, d2 = self.volume_renderer.volume_dims[1]
                     w1, h1, d1 = self.volume_renderer.volume_dims[0]
@@ -133,6 +137,64 @@ class AppCore:
                 return True
         else:
             print(f"AppCore Error: Path not found: '{folder_path}'")
+        return False
+
+    def apply_filter(self, filter_name, progress_callback=None, check_cancel=None, **params):
+        """
+        Applies a filter to the primary volume.
+        """
+        if not hasattr(self, 'current_volume_data') or self.current_volume_data is None:
+            return False, "No volume loaded."
+            
+        try:
+            # We operate on the float32 normalized data usually, but load_dataset returns what volume_loader returns.
+            # volume_loader typically returns float32 normalized (0-1) or original data depending on implementation.
+            # Assuming it's compatible with scipy.ndimage.
+            
+            logging.info(f"Filter Input Stats: Min={np.min(self.current_volume_data):.4f}, Max={np.max(self.current_volume_data):.4f}, Mean={np.mean(self.current_volume_data):.4f}, Shape={self.current_volume_data.shape}")
+
+            filtered_data = None
+            if filter_name == "Gaussian":
+                sigma = params.get('sigma', 1.0)
+                filtered_data = filters.apply_3d_gaussian(self.current_volume_data, sigma)
+            elif filter_name == "Median":
+                size = params.get('size', 3)
+                filtered_data = filters.apply_3d_median(self.current_volume_data, int(size))
+            elif filter_name == "Bilateral":
+                sigma_spatial = params.get('sigma_spatial', 1.0)
+                sigma_color = params.get('sigma_color', 0.05)
+                filtered_data = filters.apply_3d_bilateral(self.current_volume_data, sigma_spatial, sigma_color, progress_callback, check_cancel)
+            elif filter_name == "NLM":
+                h = params.get('h', 1.15)
+                patch_size = params.get('patch_size', 5)
+                patch_distance = params.get('patch_distance', 6)
+                filtered_data = filters.apply_3d_nlm(self.current_volume_data, h, int(patch_size), int(patch_distance), progress_callback, check_cancel)
+            elif filter_name == "Total Variation":
+                weight = params.get('weight', 0.1)
+                filtered_data = filters.apply_3d_tv(self.current_volume_data, weight, progress_callback, check_cancel)
+            else:
+                return False, f"Unknown filter: {filter_name}"
+            
+            # Check for cancellation (filtered_data is None)
+            if filtered_data is None:
+                 return False, "Filter cancelled by user."
+
+            if filtered_data is not None:
+                logging.info(f"Filter Output Stats: Min={np.min(filtered_data):.4f}, Max={np.max(filtered_data):.4f}, Mean={np.mean(filtered_data):.4f}")
+                self.current_volume_data = filtered_data
+                return True, f"Applied {filter_name} filter."
+            
+        except Exception as e:
+            return False, f"Filter error: {str(e)}"
+            
+        return False, "Filter app failed."
+
+    def update_render_texture(self):
+        """Updates the OpenGL texture from the current volume data. Must be called from the main thread."""
+        if self.current_volume_data is not None:
+            d, h, w = self.current_volume_data.shape
+            self.volume_renderer.create_texture(self.current_volume_data, w, h, d, slot=0)
+            return True
         return False
 
     def get_box_size(self, slot=0):

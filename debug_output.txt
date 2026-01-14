@@ -1,0 +1,4 @@
+Debug script running.
+Skimage version: 0.26.0
+Running tests...
+Tests failed: No module named 'pytest'
