@@ -177,7 +177,7 @@ class CommandInterpreter:
             "4. 'set_mode': Change rendering mode.\n"
             "   - Params: {'mode': 'mip'|'volume'|'cinematic'|'mida'}\n"
             "5. 'set_tf': Change transfer function (color map).\n"
-            "   - Params: {'tf': 'grayscale'|'viridis'|'plasma'|'medical'|'rainbow'}\n"
+            "   - Params: {'tf': 'grayscale'|'viridis'|'plasma'|'medical'|'legacy_rainbow'|'legacy_cool_warm'|'cet_fire'|'cet_rainbow'|'cet_coolwarm'|'cet_glasbey'|'cet_glasbey_dark'}\n"
             "6. 'set_slice': Position orthogonal slice.\n"
             "   - Params: {'axis': 'x'|'y'|'z', 'value': int} OR {'axis': 'x'|'y'|'z', 'percent': float}\n"
             "7. 'set_lighting': Change lighting mode.\n"
@@ -301,9 +301,19 @@ class CommandInterpreter:
             return {'action': 'set_mode', 'params': {'mode': 'mida'}}
         
         # Transfer function commands
-        for tf_name in ['viridis', 'plasma', 'medical', 'rainbow', 'grayscale']:
+        # Check specific cet prefixes first or common ones
+        tf_options = ['viridis', 'plasma', 'medical', 'legacy_rainbow', 'legacy_cool_warm', 'grayscale', 
+                      'cet_fire', 'cet_rainbow', 'cet_coolwarm', 'cet_bkr', 'cet_bky', 'cet_glasbey', 'cet_glasbey_dark',
+                      'cet_bgyw', 'cet_bmy', 'cet_kgy', 'cet_gray', 'cet_cwr', 'cet_linear_kry_5_95_c72', 'cet_blues', 'cet_isolum']
+        for tf_name in tf_options:
             if re.search(r'\b' + tf_name + r'\b', text):
                 return {'action': 'set_tf', 'params': {'tf': tf_name}}
+        
+        # Fallback for just 'rainbow' or 'cool warm' to map to legacy if cet not specified
+        if re.search(r'\brainbow\b', text) and 'cet_' not in text:
+            return {'action': 'set_tf', 'params': {'tf': 'legacy_rainbow'}}
+        if re.search(r'\bcool\s*warm\b', text) and 'cet_' not in text:
+            return {'action': 'set_tf', 'params': {'tf': 'legacy_cool_warm'}}
         
         # Slice positioning
         if re.search(r'\bslice\b', text):

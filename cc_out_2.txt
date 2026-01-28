@@ -1,0 +1,8 @@
+﻿glasbey: type=<class 'list'>, length=256
+  element[0]: type=<class 'str'>, value=#d60000
+glasbey_dark: type=<class 'list'>, length=256
+  element[0]: type=<class 'str'>, value=#d60000
+linear_kry_5_95_c72: type=<class 'list'>, length=256
+  element[0]: type=<class 'list'>, value=[0.066001, 0.066024, 0.066019]
+fire: type=<class 'list'>, length=256
+  element[0]: type=<class 'str'>, value=#000000

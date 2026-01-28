@@ -119,7 +119,7 @@ class VolumeRenderer:
             gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
             gl.glBindTexture(gl.GL_TEXTURE_3D, self.texture_ids[slot])
 
-    def create_tf_texture(self, data, slot=0):
+    def create_tf_texture(self, data, slot=0, categorical=False):
         """
         Uploads (256, 4) float32 data to a 1D OpenGL Texture.
         """
@@ -131,8 +131,10 @@ class VolumeRenderer:
         gl.glBindTexture(gl.GL_TEXTURE_1D, tex_id)
         
         gl.glTexParameteri(gl.GL_TEXTURE_1D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
-        gl.glTexParameteri(gl.GL_TEXTURE_1D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
-        gl.glTexParameteri(gl.GL_TEXTURE_1D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
+        
+        filter_mode = gl.GL_NEAREST if categorical else gl.GL_LINEAR
+        gl.glTexParameteri(gl.GL_TEXTURE_1D, gl.GL_TEXTURE_MAG_FILTER, filter_mode)
+        gl.glTexParameteri(gl.GL_TEXTURE_1D, gl.GL_TEXTURE_MIN_FILTER, filter_mode)
         
         try:
             gl.glTexImage1D(

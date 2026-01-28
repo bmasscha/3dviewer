@@ -57,9 +57,11 @@ class AppCore:
         self.vpc_wavelength = 1.0 # Virtual wavelength factor
 
         
-        self.tf_names = ["grayscale", "viridis", "plasma", "medical", "rainbow", 
+        self.tf_names = ["grayscale", "viridis", "plasma", "medical", "legacy_rainbow", 
                          "ct_bone", "ct_soft_tissue", "ct_muscle", "ct_lung", 
-                         "cool_warm", "ct_sandstone", "ct_body"]
+                         "legacy_cool_warm", "ct_sandstone", "ct_body",
+                         "cet_fire", "cet_rainbow", "cet_coolwarm", "cet_bkr", "cet_bky", "cet_glasbey", "cet_glasbey_dark",
+                         "cet_bgyw", "cet_bmy", "cet_kgy", "cet_gray", "cet_cwr", "cet_linear_kry_5_95_c72", "cet_blues", "cet_isolum"]
         self.rendering_mode = 1 # 0: MIP, 1: Standard, 2: Cinematic, 3: MIDA, 4: Shaded, 5: Edge
         self.overlay_rendering_mode = 1
         self.render_modes = ["MIP", "Volume Rendering", "Cinematic Rendering", "MIDA Rendering", "Shaded Volume", "Edge Enhanced"]
@@ -111,33 +113,42 @@ class AppCore:
                 progress_callback=progress_callback
             )
             if data is not None:
-                d, h, w = data.shape
-                slot = 1 if is_overlay else 0
-                self.volume_renderer.create_texture(data, w, h, d, slot=slot)
-                
-                if not is_overlay:
-                    self.current_dataset_path = folder_path
-                    self.current_volume_data = data # Store for CPU processing
-                    self.slice_indices = [w//2, h//2, d//2]
-                    # Update camera target to center of volume
-                    box_size = self.get_box_size(slot=0)
-                    center = box_size * 0.5
-                    self.camera.target = center
-                    self.camera.radius = glm.length(box_size) * 1.5
-                    self.camera.update_camera_vectors()
-                    self.update_tf_texture(slot=0)
-                else:
-                    self.has_overlay = True
-                    self.overlay_volume_data = data # Store for CPU processing
-                    self.update_tf_texture(slot=1)
-                    w2, h2, d2 = self.volume_renderer.volume_dims[1]
-                    w1, h1, d1 = self.volume_renderer.volume_dims[0]
-                    print(f"Overlay loaded: {w2}x{h2}x{d2} vs Primary: {w1}x{h1}x{d1}")
-                
-                return True
+                return self.finalize_volume_load(data, folder_path, is_overlay)
         else:
             print(f"AppCore Error: Path not found: '{folder_path}'")
         return False
+
+    def finalize_volume_load(self, data, path, is_overlay=False):
+        """
+        Performs post-loading initialization: GPU upload, state update, camera reset.
+        """
+        if data is None:
+            return False
+            
+        d, h, w = data.shape
+        slot = 1 if is_overlay else 0
+        self.volume_renderer.create_texture(data, w, h, d, slot=slot)
+        
+        if not is_overlay:
+            self.current_dataset_path = path
+            self.current_volume_data = data # Store for CPU processing
+            self.slice_indices = [w//2, h//2, d//2]
+            # Update camera target to center of volume
+            box_size = self.get_box_size(slot=0)
+            center = box_size * 0.5
+            self.camera.target = center
+            self.camera.radius = glm.length(box_size) * 1.5
+            self.camera.update_camera_vectors()
+            self.update_tf_texture(slot=0)
+        else:
+            self.has_overlay = True
+            self.overlay_volume_data = data # Store for CPU processing
+            self.update_tf_texture(slot=1)
+            w2, h2, d2 = self.volume_renderer.volume_dims[1]
+            w1, h1, d1 = self.volume_renderer.volume_dims[0]
+            print(f"Overlay loaded: {w2}x{h2}x{d2} vs Primary: {w1}x{h1}x{d1}")
+        
+        return True
 
     def apply_filter(self, filter_name, progress_callback=None, check_cancel=None, **params):
         """
@@ -229,7 +240,10 @@ class AppCore:
             points = self.overlay_alpha_points
             
         tf_data = transfer_functions.get_combined_tf(name, points)
-        self.volume_renderer.create_tf_texture(tf_data, slot=slot)
+        
+        # Check if categorical for sharp rendering
+        is_cat = transfer_functions.is_categorical(name)
+        self.volume_renderer.create_tf_texture(tf_data, slot=slot, categorical=is_cat)
 
 
     def execute_command_text(self, text):

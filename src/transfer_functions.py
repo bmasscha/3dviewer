@@ -1,4 +1,22 @@
 import numpy as np
+try:
+    import colorcet as cc
+    HAS_COLORCET = True
+except ImportError:
+    HAS_COLORCET = False
+
+def color_to_rgba(color_val, alpha: float = 1.0) -> list:
+    if isinstance(color_val, str):
+        hex_str = color_val.lstrip('#')
+        return [int(hex_str[i:i+2], 16) / 255.0 for i in (0, 2, 4)] + [alpha]
+    elif isinstance(color_val, (list, tuple, np.ndarray)):
+        # Assume it's already normalized RGB (0-1)
+        return list(color_val)[:3] + [alpha]
+    return [0.0, 0.0, 0.0, alpha]
+
+def is_categorical(name: str) -> bool:
+    """Returns True if the colormap should use sharp (nearest) transitions."""
+    return "glasbey" in name.lower()
 
 def get_colormap(name: str, size: int = 256, alpha_ramp: np.ndarray = None) -> np.ndarray:
     """
@@ -131,7 +149,7 @@ def get_colormap(name: str, size: int = 256, alpha_ramp: np.ndarray = None) -> n
         a = t if alpha_ramp is None else alpha_ramp
         return np.column_stack([r, g, b, a]).astype(np.float32)
     
-    elif name == "cool_warm":
+    elif name == "legacy_cool_warm":
         # Diverging: Blue -> White -> Red
         kp_pos = [0.0, 0.5, 1.0]
         kp_r = [0.23, 0.86, 0.70]
@@ -178,7 +196,7 @@ def get_colormap(name: str, size: int = 256, alpha_ramp: np.ndarray = None) -> n
         a = t if alpha_ramp is None else alpha_ramp
         return np.column_stack([r, g, b, a]).astype(np.float32)
 
-    elif name == "rainbow":
+    elif name == "legacy_rainbow":
         # Classic Rainbow (Violet-Blue-Green-Yellow-Orange-Red)
         kp_pos = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
         kp_r = [0.5, 0.0, 0.0, 1.0, 1.0, 1.0]
@@ -190,6 +208,34 @@ def get_colormap(name: str, size: int = 256, alpha_ramp: np.ndarray = None) -> n
         b = np.interp(t, kp_pos, kp_b)
         a = t if alpha_ramp is None else alpha_ramp
         return np.column_stack([r, g, b, a]).astype(np.float32)
+
+    elif HAS_COLORCET and name.startswith("cet_"):
+        cet_name = name[4:] # Remove "cet_"
+        if hasattr(cc, cet_name):
+            palette = getattr(cc, cet_name)
+            # Interpolate or sample for target size
+            n_colors = len(palette)
+            raw_data = np.array([color_to_rgba(c) for c in palette], dtype=np.float32)
+            
+            if is_categorical(name):
+                # Nearest neighbor sampling for categorical maps
+                indices = np.clip(np.floor(t * n_colors).astype(np.int32), 0, n_colors - 1)
+                arr = raw_data[indices]
+            else:
+                # Linear interpolation for gradients
+                t_orig = np.linspace(0, 1, n_colors)
+                arr = np.zeros((size, 4), dtype=np.float32)
+                for i in range(4):
+                    arr[:, i] = np.interp(t, t_orig, raw_data[:, i])
+            
+            if alpha_ramp is not None:
+                arr[:, 3] = alpha_ramp
+            else:
+                arr[:, 3] = t
+                
+            return arr
+        else:
+            return get_colormap("grayscale", size, alpha_ramp)
 
     else:
         # Fallback to grayscale

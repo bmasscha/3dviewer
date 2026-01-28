@@ -1,0 +1,71 @@
+calibration
+calibration/offset
+  Shape: (), Dtype: float64
+calibration/slope
+  Shape: (), Dtype: float64
+detector
+  Attr: serial = 896
+  Attr: temperature_C = 0.0
+  Attr: type = XRD4343_POLY
+geometry
+geometry/COR
+  Shape: (), Dtype: float64
+geometry/SDD
+  Shape: (), Dtype: float64
+geometry/SOD
+  Shape: (), Dtype: float64
+geometry/VC
+  Shape: (), Dtype: float64
+geometry/pixel_size
+  Shape: (), Dtype: float64
+geometry/resampling_factor
+  Shape: (), Dtype: float64
+geometry/start_angle
+  Shape: (), Dtype: float64
+geometry/stop_angle
+  Shape: (), Dtype: float64
+metadata
+  Attr: averages = 1
+  Attr: comment = 
+  Attr: detector_cols = 764
+  Attr: detector_rows = 764
+  Attr: file_version = 
+  Attr: num_channels = 1
+  Attr: num_offsets = 1
+  Attr: num_open_beams = 1
+  Attr: num_projections = 800
+  Attr: operator = XRE
+  Attr: scan_date = 2023-09-26 09:28:29.9200601 UTC
+  Attr: scan_id = 230926_114
+  Attr: source_format = TIFF
+  Attr: system_serial = 
+  Attr: tick_count_ms = 0.0
+  Attr: xre_acquisition_time = 
+reconstruction
+  Attr: offset = -0.0209303330630064
+  Attr: slope = 4.841831424711606e-06
+  Shape: (764, 764, 764, 1), Dtype: uint16
+reconstruction_meta
+  Attr: convergence_threshold = 0.0001
+  Attr: is_preview = False
+  Attr: iterations = 20
+  Attr: method = fdk
+  Attr: num_channels = 1
+  Attr: output_path = C:/code/antigravity/4dSpectralRecon/example_data/frog_recon_fdk.h5
+  Attr: positivity = True
+  Attr: relaxation = 0.5
+  Attr: ring_filter = True
+  Attr: ring_kernel = 21
+  Attr: ring_sectors = 1
+  Attr: start_channel = 0
+  Attr: use_vector = False
+tube_settings
+  Attr: current = 684.430054
+  Attr: exposure_time_ms = 500.0
+  Attr: focus_mode = Microfocus
+  Attr: kV = 80.147179
+  Attr: power = 50.079815
+  Attr: tube_name = xraysource
+  Attr: tube_serial = P20-799
+  Attr: xre_current_uA = 684.430054
+  Attr: xre_kV = 80.147179

@@ -37,9 +37,13 @@ class LoadVolumeThread(QThread):
             self.progress.emit(msg)
             
         try:
-            data = self.loader.load_from_folder(self.folder_path, progress_callback=progress_cb, **self.kwargs)
+            if os.path.isfile(self.folder_path):
+                data = self.loader.load_from_h5(self.folder_path, progress_callback=progress_cb, **self.kwargs)
+            else:
+                data = self.loader.load_from_folder(self.folder_path, progress_callback=progress_cb, **self.kwargs)
             self.finished.emit(data)
         except Exception as e:
+            logging.error(f"LoadVolumeThread error: {e}")
             self.finished.emit(None) # Signal failure
 
 class FilterWorker(QThread):
@@ -1230,30 +1234,37 @@ class MainWindow(QMainWindow):
             z_range = diag.z_range
             binning_factor = diag.binning_factor
             use_8bit = diag.use_8bit
+            channel_index = diag.channel_index
             
             # Show progress dialog for potentially long operation
-            progress = QProgressDialog("Initializing...", "Cancel", 0, 0, self)
+            progress = QProgressDialog("Initializing...", "Cancel", 0, 100, self)
             progress.setWindowTitle("Import Progress")
             progress.setWindowModality(Qt.WindowModality.WindowModal)
-            progress.setMinimumDuration(0)  # Show immediately
-            progress.setCancelButton(None)  # No cancel button
-            progress.setRange(0, 0)  # Indeterminate progress
+            progress.setAutoClose(True)
             progress.show()
             
-            # Callback to update progress
-            def update_progress(message):
-                progress.setLabelText(message)
-                QApplication.processEvents()
-            
-            try:
-                success = self.core.load_dataset(folder, rescale_range=rescale_range, 
-                                          z_range=z_range, binning_factor=binning_factor, 
-                                          use_8bit=use_8bit, progress_callback=update_progress)
-            finally:
-                progress.close()
+            # Start loading thread
+            self.load_thread = LoadVolumeThread(
+                self.core.volume_loader, 
+                folder, 
+                rescale_range=rescale_range,
+                z_range=z_range,
+                binning_factor=binning_factor,
+                use_8bit=use_8bit,
+                channel_index=channel_index
+            )
+            self.load_thread.progress.connect(progress.setLabelText)
+            self.load_thread.finished.connect(lambda data: self.on_volume_loaded_callback(data, folder, progress))
+            self.load_thread.start()
+
+    def on_volume_loaded_callback(self, data, folder_path, progress_dialog):
+        progress_dialog.close()
+        if data is not None:
+            # Use AppCore to finalize initialization (GPU upload, state, camera)
+            success = self.core.finalize_volume_load(data, folder_path)
             
             if success:
-                # Update slider ranges
+                # Update UI slider ranges based on new volume
                 vol_w, vol_h, vol_d = self.core.volume_renderer.volume_dims[0]
                 for s, m in [(self.slider_x, vol_w), (self.slider_y, vol_h), (self.slider_z, vol_d)]:
                     s.setRange(0, m - 1)
@@ -1263,11 +1274,13 @@ class MainWindow(QMainWindow):
                 self.slider_y.setValue(self.core.slice_indices[1])
                 self.slider_z.setValue(self.core.slice_indices[2])
                 
-                self.folder_label.setText(f"Rescaled: {folder}")
-                
-                # Initialize TF
-                self.core.set_transfer_function(self.core.current_tf_name)
+                self.folder_label.setText(f"Loaded: {os.path.basename(folder_path)}")
                 self.update_views()
+                logging.info(f"Volume loaded and initialized: {folder_path}")
+            else:
+                QMessageBox.critical(self, "Init Error", "Failed to initialize volume on GPU.")
+        else:
+            QMessageBox.critical(self, "Load Error", "Failed to load volume data.")
 
     def on_density_changed(self, val):
         self.core.slice_density = val / 10.0

@@ -1,0 +1,6 @@
+﻿Fire[0]: #000000
+Fire[128]: #ed1400
+Fire alias exists: True
+Rainbow alias exists: True
+BKR alias exists: True
+Colorwheel alias exists: True

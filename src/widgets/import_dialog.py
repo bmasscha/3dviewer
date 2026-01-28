@@ -133,11 +133,13 @@ class ImportDialog(QDialog):
         self.resize(1000, 600)
         
         self.folder_path = None
+        self.is_hdf5 = False
         self.stats = None
         self.rescale_range = (0, 65535)
         self.z_range = (0, 0)
         self.binning_factor = 1
         self.use_8bit = False
+        self.channel_index = 0
         
         self.setup_ui()
         self.apply_style()
@@ -147,12 +149,15 @@ class ImportDialog(QDialog):
         
         # 1. Folder Selection
         top_row = QHBoxLayout()
-        self.path_label = QLabel("No folder selected")
-        btn_browse = QPushButton("Select Folder...")
-        btn_browse.clicked.connect(self.on_browse)
+        self.path_label = QLabel("No folder/file selected")
+        btn_browse_folder = QPushButton("Select Folder...")
+        btn_browse_folder.clicked.connect(self.on_browse_folder)
+        btn_browse_file = QPushButton("Select H5 File...")
+        btn_browse_file.clicked.connect(self.on_browse_file)
         top_row.addWidget(self.path_label, 1)
-        top_row.addWidget(btn_browse)
-        layout.addWidget(self.create_group_frame(top_row, "Source Folder"))
+        top_row.addWidget(btn_browse_folder)
+        top_row.addWidget(btn_browse_file)
+        layout.addWidget(self.create_group_frame(top_row, "Source Data"))
         
         # 2. Main Area (Preview + Histogram)
         center_row = QHBoxLayout()
@@ -210,10 +215,19 @@ class ImportDialog(QDialog):
         self.combo_binning.currentIndexChanged.connect(self.on_reduction_changed)
         reduction_layout.addWidget(self.combo_binning, 2, 1, 1, 2)
         
+        # Channel Selection (for HDF5)
+        self.label_channel = QLabel("Energy Channel:")
+        self.combo_channel = QComboBox()
+        self.label_channel.hide()
+        self.combo_channel.hide()
+        self.combo_channel.currentIndexChanged.connect(self.on_channel_changed)
+        reduction_layout.addWidget(self.label_channel, 3, 0)
+        reduction_layout.addWidget(self.combo_channel, 3, 1, 1, 2)
+        
         # 8-bit mode
         self.chk_8bit = QCheckBox("Import as 8-bit (halves memory usage)")
         self.chk_8bit.toggled.connect(self.on_reduction_changed)
-        reduction_layout.addWidget(self.chk_8bit, 3, 0, 1, 3)
+        reduction_layout.addWidget(self.chk_8bit, 4, 0, 1, 3)
         
         config_vbox.addWidget(reduction_group)
         
@@ -258,17 +272,41 @@ class ImportDialog(QDialog):
         vbox.addLayout(inner_layout)
         return frame
 
-    def on_browse(self):
+    def on_browse_folder(self):
         path = QFileDialog.getExistingDirectory(self, "Select Volume Folder")
         if path:
             self.folder_path = path
+            self.is_hdf5 = False
+            self.path_label.setText(path)
+            self.load_metadata()
+
+    def on_browse_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select HDF5 Volume", "", "HDF5 Files (*.h5 *.hdf5);;All Files (*)")
+        if path:
+            self.folder_path = path
+            self.is_hdf5 = True
             self.path_label.setText(path)
             self.load_metadata()
 
     def load_metadata(self):
-        self.stats = self.core.volume_loader.get_quick_stats(self.folder_path)
+        if self.is_hdf5:
+            self.stats = self.core.volume_loader.get_h5_quick_stats(self.folder_path, self.channel_index)
+        else:
+            self.stats = self.core.volume_loader.get_quick_stats(self.folder_path)
+
         if self.stats:
             self.hist_widget.set_data(self.stats['histogram'], self.stats['bin_edges'])
+            
+            # Setup channel selection for HDF5
+            if self.is_hdf5 and self.stats.get('num_channels', 1) > 1:
+                self.label_channel.show()
+                self.combo_channel.show()
+                if self.combo_channel.count() == 0:
+                    for i in range(self.stats['num_channels']):
+                        self.combo_channel.addItem(f"Channel {i}")
+            else:
+                self.label_channel.hide()
+                self.combo_channel.hide()
             
             # Setup reduction controls
             self.spin_z_start.setRange(0, self.stats['depth'] - 1)
@@ -298,6 +336,11 @@ class ImportDialog(QDialog):
 
     def on_reduction_changed(self, _=None):
         self.update_memory_info()
+        self.update_preview()
+
+    def on_channel_changed(self, index):
+        self.channel_index = index
+        self.load_metadata() # Refresh stats and histogram for new channel
         self.update_preview()
 
     def update_memory_info(self):
@@ -357,32 +400,52 @@ class ImportDialog(QDialog):
 
     def update_preview(self):
         if not self.stats: return
-        
-        # We could load the specific slice for preview, but let's stick to the middle one if many slices
-        # to keep it snappy. Actually, let's just let the user scroll through the sample slices or 
-        # load specific ones if they change the slider.
-        # For now, let's just use the middle slice or first/last.
-        
-        # Actually, let's implement a simple slice loader for preview
-        import tifffile
-        files = sorted([f for f in os.listdir(self.folder_path) if f.lower().endswith(('.tif', '.tiff'))])
-        idx = self.slice_slider.value()
-        try:
-            img_data = tifffile.imread(os.path.join(self.folder_path, files[idx]))
-            
-            # Apply rescaling for the preview too!
-            lower, upper = self.rescale_range
-            img_f = img_data.astype(np.float32)
-            img_f = (img_f - lower) * 255.0 / (upper - lower)
-            img_f = np.clip(img_f, 0, 255).astype(np.uint8)
-            
-            h, w = img_f.shape
-            bytes_per_line = w
-            q_img = QImage(img_f.data, w, h, bytes_per_line, QImage.Format.Format_Grayscale8)
-            pixmap = QPixmap.fromImage(q_img)
-            self.preview_label.setPixmap(pixmap.scaled(400, 400, Qt.AspectRatioMode.KeepAspectRatio))
-        except Exception as e:
-            print(f"Preview error: {e}")
+
+        if self.is_hdf5:
+            import h5py
+            try:
+                with h5py.File(self.folder_path, 'r') as f:
+                    ds = f['reconstruction']
+                    idx = self.slice_slider.value()
+                    if len(ds.shape) == 4:
+                        img_data = ds[idx, :, :, self.channel_index]
+                    else:
+                        img_data = ds[idx, :, :]
+                    
+                    # Apply rescaling for the preview
+                    lower, upper = self.rescale_range
+                    img_f = img_data.astype(np.float32)
+                    img_f = (img_f - lower) * 255.0 / (upper - lower)
+                    img_f = np.clip(img_f, 0, 255).astype(np.uint8)
+                    
+                    h, w = img_f.shape
+                    bytes_per_line = w
+                    q_img = QImage(img_f.data, w, h, bytes_per_line, QImage.Format.Format_Grayscale8)
+                    pixmap = QPixmap.fromImage(q_img)
+                    self.preview_label.setPixmap(pixmap.scaled(400, 400, Qt.AspectRatioMode.KeepAspectRatio))
+            except Exception as e:
+                print(f"H5 Preview error: {e}")
+        else:
+            # Original TIFF preview logic
+            import tifffile
+            files = sorted([f for f in os.listdir(self.folder_path) if f.lower().endswith(('.tif', '.tiff'))])
+            idx = self.slice_slider.value()
+            try:
+                img_data = tifffile.imread(os.path.join(self.folder_path, files[idx]))
+                
+                # Apply rescaling for the preview too!
+                lower, upper = self.rescale_range
+                img_f = img_data.astype(np.float32)
+                img_f = (img_f - lower) * 255.0 / (upper - lower)
+                img_f = np.clip(img_f, 0, 255).astype(np.uint8)
+                
+                h, w = img_f.shape
+                bytes_per_line = w
+                q_img = QImage(img_f.data, w, h, bytes_per_line, QImage.Format.Format_Grayscale8)
+                pixmap = QPixmap.fromImage(q_img)
+                self.preview_label.setPixmap(pixmap.scaled(400, 400, Qt.AspectRatioMode.KeepAspectRatio))
+            except Exception as e:
+                print(f"Preview error: {e}")
 
     def apply_style(self):
         self.setStyleSheet("""

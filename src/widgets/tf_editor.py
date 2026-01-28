@@ -31,18 +31,26 @@ class TFEditorWidget(QWidget):
         h = self.height()
 
         # 1. Draw Background Colormap
-        # We'll use a gradient that approximates the current colormap
-        gradient = QLinearGradient(0, 0, w, 0)
+        from transfer_functions import get_colormap, is_categorical
+        name = self.core.current_tf_name
         
-        # Sample the colormap at a few points
-        from transfer_functions import get_colormap
-        tf_data = get_colormap(self.core.current_tf_name, size=10) # low res for gradient is fine
-        for i in range(len(tf_data)):
-            pos = i / (len(tf_data) - 1)
-            r, g, b, _ = tf_data[i]
-            gradient.setColorAt(pos, QColor(int(r*255), int(g*255), int(b*255)))
-        
-        painter.fillRect(self.rect(), gradient)
+        if is_categorical(name):
+            # Draw sharp blocks
+            n_blocks = 256
+            block_w = w / n_blocks
+            tf_data = get_colormap(name, size=n_blocks)
+            for i in range(n_blocks):
+                r, g, b, _ = tf_data[i]
+                painter.fillRect(int(i * block_w), 0, int(block_w) + 1, h, QColor(int(r*255), int(g*255), int(b*255)))
+        else:
+            # Use gradient for smooth maps
+            gradient = QLinearGradient(0, 0, w, 0)
+            tf_data = get_colormap(name, size=20)
+            for i in range(len(tf_data)):
+                pos = i / (len(tf_data) - 1)
+                r, g, b, _ = tf_data[i]
+                gradient.setColorAt(pos, QColor(int(r*255), int(g*255), int(b*255)))
+            painter.fillRect(self.rect(), gradient)
         
         # 2. Draw opacity curve
         pen = QPen(QColor(255, 255, 255), 2)
