@@ -302,14 +302,12 @@ class VolumeLoader:
                     return None
 
                 mid_idx = d // 2
-                
+                indices = np.unique(np.linspace(0, d - 1, sample_count, dtype=int))
                 if len(shape) == 4:
                     mid_slice = ds[mid_idx, :, :, channel_index]
-                    indices = np.linspace(0, d - 1, sample_count, dtype=int)
                     samples = ds[indices, :, :, channel_index]
                 else:
                     mid_slice = ds[mid_idx, :, :]
-                    indices = np.linspace(0, d - 1, sample_count, dtype=int)
                     samples = ds[indices, :, :]
 
                 hist, bin_edges = np.histogram(samples, bins=256, range=(0, 65535))

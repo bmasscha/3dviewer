@@ -326,7 +326,10 @@ class ImportDialog(QDialog):
             self.update_memory_info()
             self.update_preview()
         else:
-            self.path_label.setText("Error: No TIFF files found in folder.")
+            if self.is_hdf5:
+                self.path_label.setText("Error: Failed to read HDF5 metadata.")
+            else:
+                self.path_label.setText("Error: No TIFF files found in folder.")
             self.btn_import.setEnabled(False)
 
     def on_range_changed(self, lower, upper):
