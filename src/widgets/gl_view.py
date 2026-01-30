@@ -162,12 +162,15 @@ class GLViewWidget(QOpenGLWidget):
             if self.mode == "Axial":
                 axis = 0
                 depth = self.core.slice_indices[2] / max(1, vol_d-1)
+                aspect_data = box_size.x / box_size.y
             elif self.mode == "Coronal":
                 axis = 1
                 depth = self.core.slice_indices[1] / max(1, vol_h-1)
+                aspect_data = box_size.x / box_size.z
             else: # Sagittal
                 axis = 2
                 depth = self.core.slice_indices[0] / max(1, vol_w-1)
+                aspect_data = box_size.y / box_size.z
                 
             self.core.slice_shader.set_int("axis", axis)
             self.core.slice_shader.set_float("sliceDepth", depth)
@@ -175,7 +178,16 @@ class GLViewWidget(QOpenGLWidget):
             self.core.slice_shader.set_float("threshold", self.core.slice_threshold)
             self.core.slice_shader.set_float("tfSlope", self.core.tf_slope)
             self.core.slice_shader.set_float("tfOffset", self.core.tf_offset)
-            self.render_quad()
+
+            # Aspect Ratio Conservation
+            aspect_view = self.width() / max(1, self.height())
+            scale_x, scale_y = 1.0, 1.0
+            if aspect_data > aspect_view:
+                scale_y = aspect_view / aspect_data
+            else:
+                scale_x = aspect_data / aspect_view
+
+            self.render_quad(scale_x, scale_y)
             
         elif self.mode == "3D":
             self.core.ray_shader.use()
@@ -263,12 +275,12 @@ class GLViewWidget(QOpenGLWidget):
             
             self.render_quad()
 
-    def render_quad(self):
+    def render_quad(self, scale_x=1.0, scale_y=1.0):
         gl.glBegin(gl.GL_QUADS)
-        gl.glTexCoord2f(0.0, 0.0); gl.glVertex3f(-1.0, -1.0, 0.0)
-        gl.glTexCoord2f(1.0, 0.0); gl.glVertex3f( 1.0, -1.0, 0.0)
-        gl.glTexCoord2f(1.0, 1.0); gl.glVertex3f( 1.0,  1.0, 0.0)
-        gl.glTexCoord2f(0.0, 1.0); gl.glVertex3f(-1.0,  1.0, 0.0)
+        gl.glTexCoord2f(0.0, 0.0); gl.glVertex3f(-1.0 * scale_x, -1.0 * scale_y, 0.0)
+        gl.glTexCoord2f(1.0, 0.0); gl.glVertex3f( 1.0 * scale_x, -1.0 * scale_y, 0.0)
+        gl.glTexCoord2f(1.0, 1.0); gl.glVertex3f( 1.0 * scale_x,  1.0 * scale_y, 0.0)
+        gl.glTexCoord2f(0.0, 1.0); gl.glVertex3f(-1.0 * scale_x,  1.0 * scale_y, 0.0)
         gl.glEnd()
 
     def mousePressEvent(self, event: QMouseEvent):
