@@ -28,7 +28,7 @@ class VolumeLoader:
         # Allow use up to 80% of available RAM
         return estimated < (available * 0.8), estimated, available
 
-    def load_from_folder(self, folder_path, rescale_range=None, z_range=None, binning_factor=1, use_8bit=False, progress_callback=None):
+    def load_from_folder(self, folder_path, rescale_range=None, z_range=None, binning_factor=1, use_8bit=False, progress_callback=None, **kwargs):
         """
         Loads .tif/.tiff files from the specified folder with optional reduction.
         
@@ -171,7 +171,7 @@ class VolumeLoader:
         
         return self.data
 
-    def load_from_h5(self, file_path, channel_index=0, rescale_range=None, z_range=None, binning_factor=1, use_8bit=False, progress_callback=None):
+    def load_from_h5(self, file_path, channel_index=0, rescale_range=None, z_range=None, binning_factor=1, use_8bit=False, progress_callback=None, **kwargs):
         """
         Loads volumetric data from an HDF5 file. 
         Expects a 'reconstruction' dataset with shape (slices, rows, cols, channels) or (slices, rows, cols).
