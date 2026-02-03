@@ -96,7 +96,7 @@ class AIWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("3D Volume Viewer - PyQt Professional")
+        self.setWindowTitle("Viewer Bert v0.0.7")
         self.resize(1600, 900)
         
         self.core = AppCore()

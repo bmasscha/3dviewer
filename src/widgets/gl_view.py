@@ -12,10 +12,14 @@ class GLViewWidget(QOpenGLWidget):
         super().__init__(parent)
         self.core = core
         self.mode = mode # "Axial", "Coronal", "Sagittal", "3D"
-        
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.last_mouse_pos = (0, 0)
         self.mouse_pressed = False
+        self.right_mouse_pressed = False
+
+        # Interaction State for Orthogonal Views
+        self.view_zoom = 1.0
+        self.view_offset = glm.vec2(0.0, 0.0)
         
         # Adaptive Quality State
         self.is_interacting = False
@@ -187,7 +191,11 @@ class GLViewWidget(QOpenGLWidget):
             else:
                 scale_x = aspect_data / aspect_view
 
-            self.render_quad(scale_x, scale_y)
+            # Apply View Zoom and Offset
+            scale_x *= self.view_zoom
+            scale_y *= self.view_zoom
+            
+            self.render_quad(scale_x, scale_y, self.view_offset.x, self.view_offset.y)
             
         elif self.mode == "3D":
             self.core.ray_shader.use()
@@ -275,12 +283,12 @@ class GLViewWidget(QOpenGLWidget):
             
             self.render_quad()
 
-    def render_quad(self, scale_x=1.0, scale_y=1.0):
+    def render_quad(self, scale_x=1.0, scale_y=1.0, offset_x=0.0, offset_y=0.0):
         gl.glBegin(gl.GL_QUADS)
-        gl.glTexCoord2f(0.0, 0.0); gl.glVertex3f(-1.0 * scale_x, -1.0 * scale_y, 0.0)
-        gl.glTexCoord2f(1.0, 0.0); gl.glVertex3f( 1.0 * scale_x, -1.0 * scale_y, 0.0)
-        gl.glTexCoord2f(1.0, 1.0); gl.glVertex3f( 1.0 * scale_x,  1.0 * scale_y, 0.0)
-        gl.glTexCoord2f(0.0, 1.0); gl.glVertex3f(-1.0 * scale_x,  1.0 * scale_y, 0.0)
+        gl.glTexCoord2f(0.0, 0.0); gl.glVertex3f(-1.0 * scale_x + offset_x, -1.0 * scale_y + offset_y, 0.0)
+        gl.glTexCoord2f(1.0, 0.0); gl.glVertex3f( 1.0 * scale_x + offset_x, -1.0 * scale_y + offset_y, 0.0)
+        gl.glTexCoord2f(1.0, 1.0); gl.glVertex3f( 1.0 * scale_x + offset_x,  1.0 * scale_y + offset_y, 0.0)
+        gl.glTexCoord2f(0.0, 1.0); gl.glVertex3f(-1.0 * scale_x + offset_x,  1.0 * scale_y + offset_y, 0.0)
         gl.glEnd()
 
     def mousePressEvent(self, event: QMouseEvent):
@@ -297,9 +305,6 @@ class GLViewWidget(QOpenGLWidget):
             self.right_mouse_pressed = False
 
     def mouseMoveEvent(self, event: QMouseEvent):
-        if self.mode != "3D":
-            return
-            
         curr_x, curr_y = event.position().x(), event.position().y()
         
         # Calculate NDC diffs
@@ -308,25 +313,56 @@ class GLViewWidget(QOpenGLWidget):
         
         dx = curr_ndc_x - prev_ndc_x
         dy = curr_ndc_y - prev_ndc_y
-        
-        if self.mouse_pressed:
-            self.core.camera.rotate(prev_ndc_x, prev_ndc_y, curr_ndc_x, curr_ndc_y)
-            self.start_interaction()
-            self.update()
-        elif hasattr(self, 'right_mouse_pressed') and self.right_mouse_pressed:
-            self.core.camera.pan(dx, dy)
-            self.start_interaction()
-            self.update()
+
+        if self.mode == "3D":
+            if self.mouse_pressed:
+                self.core.camera.rotate(prev_ndc_x, prev_ndc_y, curr_ndc_x, curr_ndc_y)
+                self.start_interaction()
+                self.update()
+            elif self.right_mouse_pressed:
+                self.core.camera.pan(dx, dy)
+                self.start_interaction()
+                self.update()
+        else:
+            # Orthogonal Panning
+            if self.mouse_pressed:
+                self.view_offset.x += dx
+                self.view_offset.y += dy
+                self.update()
             
         self.last_mouse_pos = (curr_x, curr_y)
 
     def wheelEvent(self, event: QWheelEvent):
+        delta = event.angleDelta().y() / 120.0
+
         if self.mode == "3D":
-            delta = event.angleDelta().y() / 120.0
             self.core.camera.process_scroll(delta)
-            
             self.start_interaction()
             self.update()
+        else:
+            modifiers = event.modifiers()
+            if modifiers & Qt.KeyboardModifier.ControlModifier:
+                # Zooming
+                zoom_factor = 1.1 if delta > 0 else 0.9
+                self.view_zoom *= zoom_factor
+                self.view_zoom = max(0.1, min(self.view_zoom, 50.0))
+                self.update()
+            else:
+                # Slicing
+                vol_dims = self.core.volume_renderer.volume_dims[0]
+                if vol_dims[0] == 0: return
+
+                if self.mode == "Axial":
+                    idx = 2
+                elif self.mode == "Coronal":
+                    idx = 1
+                else: # Sagittal
+                    idx = 0
+                
+                step = 1 if delta > 0 else -1
+                new_val = self.core.slice_indices[idx] + step
+                self.core.slice_indices[idx] = max(0, min(new_val, vol_dims[idx] - 1))
+                self.update()
 
     def start_interaction(self):
         self.is_interacting = True
@@ -341,9 +377,20 @@ class GLViewWidget(QOpenGLWidget):
         ndc_y = 1.0 - (y / self.height()) * 2.0
         return max(-1.0, min(1.0, ndc_x)), max(-1.0, min(1.0, ndc_y))
 
+    def reset_orthogonal_view(self):
+        self.view_zoom = 1.0
+        self.view_offset = glm.vec2(0.0, 0.0)
+        self.update()
+
     def contextMenuEvent(self, event):
         menu = QMenu(self)
         
+        if self.mode != "3D":
+            fit_window = QAction("Fit to Window", self)
+            fit_window.triggered.connect(self.reset_orthogonal_view)
+            menu.addAction(fit_window)
+            menu.addSeparator()
+
         save_this = QAction(f"Save This View ({self.mode})", self)
         save_this.triggered.connect(lambda: self.sig_save_request.emit("single"))
         
