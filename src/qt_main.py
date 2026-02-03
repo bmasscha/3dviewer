@@ -180,7 +180,10 @@ class MainWindow(QMainWindow):
         # Connect save signals
         for view in [self.view_axial, self.view_coronal, self.view_sagittal, self.view_3d]:
             view.sig_save_request.connect(lambda mode, v=view: self.on_request_save_view(v, mode))
-        
+            # Connect export slices signal (only for orthogonal views)
+            if view.mode != "3D":
+                view.sig_export_slices.connect(lambda mode, v=view: self.on_request_export_slices(v, mode))
+
         # Set titles for views
         self.add_viewport_overlay(self.grid_layout, "Axial", 0, 0)
         self.add_viewport_overlay(self.grid_layout, "Sagittal", 0, 1)
@@ -463,6 +466,123 @@ class MainWindow(QMainWindow):
             logging.error(f"Failed to save image: {e}")
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Save Error", f"Could not save image: {str(e)}")
+
+    def on_request_export_slices(self, source_view, mode):
+        """Exports all slices along the specified orthogonal axis as individual PNG files."""
+        from PyQt6.QtWidgets import QMessageBox, QFileDialog, QProgressDialog, QApplication
+
+        # 1. Determine axis and slice range
+        vol_w, vol_h, vol_d = self.core.volume_renderer.volume_dims[0]
+
+        if mode == "Axial":
+            axis_idx = 2
+            num_slices = vol_d
+        elif mode == "Coronal":
+            axis_idx = 1
+            num_slices = vol_h
+        elif mode == "Sagittal":
+            axis_idx = 0
+            num_slices = vol_w
+        else:
+            logging.error(f"Invalid mode for slice export: {mode}")
+            return
+
+        if num_slices == 0:
+            QMessageBox.warning(self, "Export Error", "No volume data loaded.")
+            return
+
+        # 2. Ask user for output folder
+        base_path = self.core.current_dataset_path
+        if not base_path or not os.path.isdir(base_path):
+            base_path = os.getcwd()
+
+        # Suggest "slices_[mode]" folder
+        suggested_folder = os.path.join(base_path, f"slices_{mode.lower()}")
+
+        output_folder = QFileDialog.getExistingDirectory(
+            self,
+            f"Select Output Folder for {mode} Slices ({num_slices} images)",
+            suggested_folder
+        )
+
+        if not output_folder:
+            return
+
+        # 3. Create output folder if it doesn't exist
+        try:
+            os.makedirs(output_folder, exist_ok=True)
+        except Exception as e:
+            QMessageBox.critical(self, "Folder Error", f"Could not create output folder: {str(e)}")
+            return
+
+        # 4. Store original slice index
+        original_slice_idx = self.core.slice_indices[axis_idx]
+
+        # 5. Setup progress dialog
+        progress = QProgressDialog(f"Exporting {mode} slices...", "Cancel", 0, num_slices, self)
+        progress.setWindowTitle("Export Progress")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.show()
+
+        # 6. Iterate through all slices
+        exported_count = 0
+        try:
+            for slice_idx in range(num_slices):
+                # Check for cancellation
+                if progress.wasCanceled():
+                    logging.info(f"Slice export cancelled at {slice_idx}/{num_slices}")
+                    break
+
+                # Update progress
+                progress.setValue(slice_idx)
+                progress.setLabelText(f"Exporting {mode} slice {slice_idx + 1}/{num_slices}...")
+
+                # Update slice index
+                self.core.slice_indices[axis_idx] = slice_idx
+
+                # Trigger render
+                source_view.update()
+
+                # Process events to ensure rendering completes
+                QApplication.processEvents()
+
+                # Capture framebuffer
+                pixmap = source_view.grabFramebuffer()
+
+                # Generate filename with zero-padded index
+                filename = f"{mode.lower()}_{slice_idx:03d}.png"
+                filepath = os.path.join(output_folder, filename)
+
+                # Save PNG
+                if pixmap.save(filepath):
+                    exported_count += 1
+                else:
+                    logging.warning(f"Failed to save slice {slice_idx} to {filepath}")
+
+            # Final progress update
+            progress.setValue(num_slices)
+
+        except Exception as e:
+            logging.error(f"Error during slice export: {e}")
+            QMessageBox.critical(self, "Export Error", f"Export failed: {str(e)}")
+
+        finally:
+            # 7. Restore original slice index
+            self.core.slice_indices[axis_idx] = original_slice_idx
+            source_view.update()
+            progress.close()
+
+        # 8. Show completion message
+        if exported_count > 0:
+            QMessageBox.information(
+                self,
+                "Export Complete",
+                f"Successfully exported {exported_count} slices to:\n{output_folder}"
+            )
+            logging.info(f"Exported {exported_count} {mode} slices to {output_folder}")
+        else:
+            QMessageBox.warning(self, "Export Cancelled", "No slices were exported.")
 
     def create_layout_panel(self, layout):
         container = QFrame()

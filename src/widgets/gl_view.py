@@ -7,7 +7,8 @@ import glm
 
 class GLViewWidget(QOpenGLWidget):
     sig_save_request = pyqtSignal(str) # "single" or "all"
-    
+    sig_export_slices = pyqtSignal(str) # Emits mode name (Axial/Coronal/Sagittal)
+
     def __init__(self, core, mode="Axial", parent=None):
         super().__init__(parent)
         self.core = core
@@ -384,19 +385,25 @@ class GLViewWidget(QOpenGLWidget):
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
-        
+
         if self.mode != "3D":
             fit_window = QAction("Fit to Window", self)
             fit_window.triggered.connect(self.reset_orthogonal_view)
             menu.addAction(fit_window)
             menu.addSeparator()
 
+            # Export All Slices action
+            export_slices = QAction(f"Export All Slices ({self.mode})...", self)
+            export_slices.triggered.connect(lambda: self.sig_export_slices.emit(self.mode))
+            menu.addAction(export_slices)
+            menu.addSeparator()
+
         save_this = QAction(f"Save This View ({self.mode})", self)
         save_this.triggered.connect(lambda: self.sig_save_request.emit("single"))
-        
+
         save_all = QAction("Save All Views (Composite)", self)
         save_all.triggered.connect(lambda: self.sig_save_request.emit("all"))
-        
+
         menu.addAction(save_this)
         menu.addAction(save_all)
         menu.exec(event.globalPos())
