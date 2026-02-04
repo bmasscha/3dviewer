@@ -183,6 +183,8 @@ class MainWindow(QMainWindow):
             # Connect export slices signal (only for orthogonal views)
             if view.mode != "3D":
                 view.sig_export_slices.connect(lambda mode, v=view: self.on_request_export_slices(v, mode))
+            else:
+                view.sig_record_movie.connect(self.on_request_record_movie)
 
         # Set titles for views
         self.add_viewport_overlay(self.grid_layout, "Axial", 0, 0)
@@ -243,6 +245,12 @@ class MainWindow(QMainWindow):
         self.slider_vol_density, self.label_vol_density = self.create_labeled_slider(
             vbox, "3D Density Multiplier", 1, 2000, int(self.core.volume_density * 10), 
             self.on_vol_density_changed, transform=lambda v: f"{v/10.0:.1f}"
+        )
+        
+        # 3D Threshold
+        self.slider_vol_threshold, self.label_vol_threshold = self.create_labeled_slider(
+            vbox, "3D Volume Threshold", 0, 100, int(self.core.volume_threshold * 100), 
+            self.on_vol_threshold_changed, transform=lambda v: f"{v/100.0:.2f}"
         )
         
         # Light Intensity
@@ -360,6 +368,10 @@ class MainWindow(QMainWindow):
 
     def on_vol_density_changed(self, val):
         self.core.volume_density = val / 10.0
+        self.update_views()
+
+    def on_vol_threshold_changed(self, val):
+        self.core.volume_threshold = val / 100.0
         self.update_views()
 
     def on_light_intensity_changed(self, val):
@@ -1450,6 +1462,110 @@ class MainWindow(QMainWindow):
     def on_tf_points_changed(self, points):
         self.core.update_alpha_points(points)
         self.update_views()
+
+    def on_request_record_movie(self):
+        """Records a 360-degree rotation movie of the 3D rendering."""
+        if not self.core.volume_renderer.texture_ids:
+            QMessageBox.warning(self, "Recording Error", "No volume data loaded.")
+            return
+
+        # 1. Ask for save path
+        base_path = self.core.current_dataset_path or os.getcwd()
+        movies_dir = os.path.join(base_path, "movies")
+        try:
+            os.makedirs(movies_dir, exist_ok=True)
+        except:
+            movies_dir = base_path
+            
+        now = datetime.now().strftime("%Y%m%d_%H%M%S")
+        suggested_path = os.path.join(movies_dir, f"rotation_360_{now}.mp4")
+        
+        save_path, _ = QFileDialog.getSaveFileName(
+            self, "Save 360 Movie", suggested_path, "MP4 Video (*.mp4)"
+        )
+        
+        if not save_path:
+            return
+
+        # 2. Setup Recording
+        import imageio
+        import numpy as np
+        import glm
+
+        num_frames = 120 # 4 seconds at 30 fps
+        fps = 30
+        
+        progress = QProgressDialog("Recording 360° Movie...", "Cancel", 0, num_frames, self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.show()
+
+        # Save original orientation
+        original_orientation = self.core.camera.orientation
+
+        try:
+            writer = imageio.get_writer(save_path, fps=fps, codec='libx264', quality=8)
+            
+            for i in range(num_frames):
+                if progress.wasCanceled():
+                    break
+                
+                progress.setValue(i)
+                progress.setLabelText(f"Rendering frame {i+1}/{num_frames}...")
+                
+                # Calculate rotation angle (360 degrees over num_frames)
+                angle_deg = (i / num_frames) * 360.0
+                angle_rad = glm.radians(angle_deg)
+                
+                # Apply rotation around screen-vertical axis
+                q_rot = glm.angleAxis(angle_rad, glm.vec3(0, 1, 0))
+                self.core.camera.orientation = original_orientation * q_rot
+                self.core.camera.update_camera_vectors()
+                # Force High Quality Render (Disable interaction scaling)
+                self.view_3d.is_interacting = False
+                
+                # Capture frame from the widget
+                # grabFramebuffer() triggers a render internally.
+                frame = self.view_3d.grabFramebuffer()
+                
+                # Create a black background image to blend onto.
+                # This ensures semi-transparent "haze" is correctly darkened (as seen in the viewer)
+                # and handles all color format conversions via Qt's QPainter.
+                # We use Format_RGBA8888 because it has a predictable memory layout: R, G, B, A.
+                blended = QImage(frame.size(), QImage.Format.Format_RGBA8888)
+                blended.fill(Qt.GlobalColor.black)
+                
+                painter = QPainter(blended)
+                painter.drawImage(0, 0, frame)
+                painter.end()
+                
+                # Convert final blended image to numpy for imageio
+                width = blended.width()
+                height = blended.height()
+                ptr = blended.bits()
+                ptr.setsize(height * width * 4)
+                arr = np.frombuffer(ptr, np.uint8).reshape((height, width, 4))
+                
+                # Extract RGB from the RGBA (R=0, G=1, B=2)
+                actual_rgb = arr[:, :, :3]
+                
+                writer.append_data(actual_rgb)
+                
+            writer.close()
+            progress.setValue(num_frames)
+            
+            if not progress.wasCanceled():
+                QMessageBox.information(self, "Recording Complete", f"Movie saved to:\n{save_path}")
+                logging.info(f"360 movie saved to {save_path}")
+                
+        except Exception as e:
+            logging.error(f"Failed to record movie: {e}")
+            QMessageBox.critical(self, "Recording Error", f"Could not record movie: {str(e)}")
+        finally:
+            # Restore original orientation
+            self.core.camera.orientation = original_orientation
+            self.core.camera.update_camera_vectors()
+            self.view_3d.update()
+            progress.close()
 
     def update_views(self):
         self.view_axial.update()

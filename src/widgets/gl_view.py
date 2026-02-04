@@ -8,6 +8,7 @@ import glm
 class GLViewWidget(QOpenGLWidget):
     sig_save_request = pyqtSignal(str) # "single" or "all"
     sig_export_slices = pyqtSignal(str) # Emits mode name (Axial/Coronal/Sagittal)
+    sig_record_movie = pyqtSignal()
 
     def __init__(self, core, mode="Axial", parent=None):
         super().__init__(parent)
@@ -396,6 +397,12 @@ class GLViewWidget(QOpenGLWidget):
             export_slices = QAction(f"Export All Slices ({self.mode})...", self)
             export_slices.triggered.connect(lambda: self.sig_export_slices.emit(self.mode))
             menu.addAction(export_slices)
+            menu.addSeparator()
+
+        if self.mode == "3D":
+            record_movie = QAction("Record 360° Movie...", self)
+            record_movie.triggered.connect(self.sig_record_movie.emit)
+            menu.addAction(record_movie)
             menu.addSeparator()
 
         save_this = QAction(f"Save This View ({self.mode})", self)
