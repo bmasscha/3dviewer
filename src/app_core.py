@@ -62,8 +62,8 @@ class AppCore:
                          "legacy_cool_warm", "ct_sandstone", "ct_body",
                          "cet_fire", "cet_rainbow", "cet_coolwarm", "cet_bkr", "cet_bky", "cet_glasbey", "cet_glasbey_dark",
                          "cet_bgyw", "cet_bmy", "cet_kgy", "cet_gray", "cet_cwr", "cet_linear_kry_5_95_c72", "cet_blues", "cet_isolum"]
-        self.rendering_mode = 1 # 0: MIP, 1: Standard, 2: Cinematic, 3: MIDA, 4: Shaded, 5: Edge
-        self.overlay_rendering_mode = 1
+        self.rendering_mode = 0 # 0: MIP, 1: Standard, 2: Cinematic, 3: MIDA, 4: Shaded, 5: Edge
+        self.overlay_rendering_mode = 0
         self.render_modes = ["MIP", "Volume Rendering", "Cinematic Rendering", "MIDA Rendering", "Shaded Volume", "Edge Enhanced"]
         
         self.clip_min = glm.vec3(0.0, 0.0, 0.0)
