@@ -32,7 +32,7 @@ def test_command(client, component, command, arg1="", arg2="", wait_for="ACK"):
 
 
 def main():
-    client = AcquilaClient(server_ip="127.0.0.1")
+    client = AcquilaClient(server_ip="127.0.0.1", inbound_port=50003, outbound_port=50002)
     component = "3dviewer"
     
     print("=" * 70)

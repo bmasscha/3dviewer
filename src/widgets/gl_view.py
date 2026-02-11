@@ -1,6 +1,6 @@
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QMouseEvent, QWheelEvent, QAction
+from PyQt6.QtGui import QMouseEvent, QWheelEvent, QAction, QPainter, QPen, QColor, QFont
 from PyQt6.QtWidgets import QMenu
 import OpenGL.GL as gl
 import glm
@@ -9,6 +9,7 @@ class GLViewWidget(QOpenGLWidget):
     sig_save_request = pyqtSignal(str) # "single" or "all"
     sig_export_slices = pyqtSignal(str) # Emits mode name (Axial/Coronal/Sagittal)
     sig_record_movie = pyqtSignal()
+    sig_slice_changed = pyqtSignal()
 
     def __init__(self, core, mode="Axial", parent=None):
         super().__init__(parent)
@@ -84,40 +85,38 @@ class GLViewWidget(QOpenGLWidget):
 
     def paintGL(self):
         default_fbo = self.defaultFramebufferObject()
-        
+
         # --- Pass 1: Render Volume to FBO ---
         if self.core.vpc_enabled and hasattr(self, 'fbo'):
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self.fbo)
             gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
         else:
             # Render directly to widget backbuffer
-            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, default_fbo) 
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, default_fbo)
             gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
-        
+
         self.render_scene()
-        
+
         # --- Pass 2: Apply VPC Filter (if enabled) ---
         if self.core.vpc_enabled and hasattr(self, 'fbo'):
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, default_fbo) # Switch back to widget
             gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT) # Clear screen
 
-            
             if self.core.vpc_shader:
                 self.core.vpc_shader.use()
-                
+
                 gl.glActiveTexture(gl.GL_TEXTURE0)
                 gl.glBindTexture(gl.GL_TEXTURE_2D, self.fbo_texture)
                 self.core.vpc_shader.set_int("textureSampler", 0)
-                self.core.vpc_shader.set_float("distance", self.core.vpc_distance / 100.0) # Normalize?? 
-                # User range 0-100, shader param usually small
+                self.core.vpc_shader.set_float("distance", self.core.vpc_distance / 100.0)
                 self.core.vpc_shader.set_float("wavelength", self.core.vpc_wavelength)
                 self.core.vpc_shader.set_int("enabled", 1)
-                
+
                 self.render_quad()
-            else:
-                # Fallback: just draw the texture
-                # (Ideally use a simple texture shader, but we can assume vpc_shader loads if we are here)
-                pass
+
+        # --- Pass 3: Draw Scale Bar Overlay (for orthogonal views) ---
+        if self.mode in ["Axial", "Coronal", "Sagittal"] and self.core.show_scale_bar:
+            self.draw_scale_bar()
 
     def render_scene(self):
         if not self.core.volume_renderer.texture_ids:
@@ -293,8 +292,132 @@ class GLViewWidget(QOpenGLWidget):
         gl.glTexCoord2f(0.0, 1.0); gl.glVertex3f(-1.0 * scale_x + offset_x,  1.0 * scale_y + offset_y, 0.0)
         gl.glEnd()
 
+    def draw_scale_bar(self):
+        """
+        Draws a scale bar overlay on orthogonal views using QPainter.
+        The scale bar shows physical dimensions based on voxel size.
+        """
+        voxel_size = self.core.geometry.get('voxel_size')
+        if not voxel_size:
+            return  # No geometry info available
+
+        # Get volume dimensions for this view
+        vol_w, vol_h, vol_d = self.core.volume_renderer.volume_dims[0]
+        if vol_w == 0:
+            return
+
+        # Determine which dimensions are visible in this view
+        box_size = self.core.get_box_size(slot=0)
+        if self.mode == "Axial":
+            # X-Y plane, viewing Z
+            view_width_voxels = vol_w
+            aspect_data = box_size.x / box_size.y
+        elif self.mode == "Coronal":
+            # X-Z plane, viewing Y
+            view_width_voxels = vol_w
+            aspect_data = box_size.x / box_size.z
+        else:  # Sagittal
+            # Y-Z plane, viewing X
+            view_width_voxels = vol_h
+            aspect_data = box_size.y / box_size.z
+
+        # Calculate how much of the view is occupied by the data (considering aspect ratio)
+        widget_w = self.width()
+        widget_h = self.height()
+        aspect_view = widget_w / max(1, widget_h)
+
+        if aspect_data > aspect_view:
+            # Data is wider than view - width fills the view
+            data_pixel_width = widget_w * self.view_zoom
+        else:
+            # Data is taller than view - height fills the view
+            data_pixel_width = widget_h * aspect_data * self.view_zoom
+
+        # Physical width of visible data in mm
+        physical_width_mm = view_width_voxels * voxel_size
+
+        # Pixels per mm in the current view
+        pixels_per_mm = data_pixel_width / physical_width_mm
+
+        # Choose a nice round scale bar length
+        # Target about 15-25% of the view width
+        target_bar_pixels = widget_w * 0.2
+
+        # Calculate what physical length that would be
+        target_length_mm = target_bar_pixels / pixels_per_mm
+
+        # Round to a nice value
+        nice_lengths = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5,
+                        1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]
+        bar_length_mm = nice_lengths[0]
+        for nl in nice_lengths:
+            if nl <= target_length_mm:
+                bar_length_mm = nl
+            else:
+                break
+
+        # Calculate bar length in pixels
+        bar_length_pixels = int(bar_length_mm * pixels_per_mm)
+
+        # Format the label
+        if bar_length_mm >= 1:
+            label = f"{bar_length_mm:.0f} mm"
+        elif bar_length_mm >= 0.001:
+            label = f"{bar_length_mm * 1000:.0f} µm"
+        else:
+            label = f"{bar_length_mm * 1e6:.0f} nm"
+
+        # Draw using QPainter
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # Position: bottom-left corner with margin
+        margin = 20
+        bar_height = 6
+        bar_x = margin
+        bar_y = widget_h - margin - bar_height
+
+        # Draw bar background (dark outline for visibility)
+        painter.setPen(QPen(QColor(0, 0, 0), 3))
+        painter.drawLine(bar_x, bar_y + bar_height // 2,
+                        bar_x + bar_length_pixels, bar_y + bar_height // 2)
+
+        # Draw bar (white)
+        painter.setPen(QPen(QColor(255, 255, 255), 2))
+        painter.drawLine(bar_x, bar_y + bar_height // 2,
+                        bar_x + bar_length_pixels, bar_y + bar_height // 2)
+
+        # Draw end caps
+        painter.setPen(QPen(QColor(0, 0, 0), 3))
+        painter.drawLine(bar_x, bar_y, bar_x, bar_y + bar_height)
+        painter.drawLine(bar_x + bar_length_pixels, bar_y,
+                        bar_x + bar_length_pixels, bar_y + bar_height)
+
+        painter.setPen(QPen(QColor(255, 255, 255), 2))
+        painter.drawLine(bar_x, bar_y, bar_x, bar_y + bar_height)
+        painter.drawLine(bar_x + bar_length_pixels, bar_y,
+                        bar_x + bar_length_pixels, bar_y + bar_height)
+
+        # Draw label
+        font = QFont("Arial", 10, QFont.Weight.Bold)
+        painter.setFont(font)
+
+        # Text with shadow for readability
+        text_x = bar_x + bar_length_pixels // 2
+        text_y = bar_y - 5
+
+        painter.setPen(QColor(0, 0, 0))
+        painter.drawText(text_x - painter.fontMetrics().horizontalAdvance(label) // 2 + 1,
+                        text_y + 1, label)
+        painter.setPen(QColor(255, 255, 255))
+        painter.drawText(text_x - painter.fontMetrics().horizontalAdvance(label) // 2,
+                        text_y, label)
+
+        painter.end()
+
     def mousePressEvent(self, event: QMouseEvent):
         self.last_mouse_pos = (event.position().x(), event.position().y())
+        self.panned_since_press = False
         if event.button() == Qt.MouseButton.LeftButton:
             self.mouse_pressed = True
         elif event.button() == Qt.MouseButton.RightButton:
@@ -318,10 +441,15 @@ class GLViewWidget(QOpenGLWidget):
 
         if self.mode == "3D":
             if self.mouse_pressed:
-                self.core.camera.rotate(prev_ndc_x, prev_ndc_y, curr_ndc_x, curr_ndc_y)
+                if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                    self.core.camera.pan(dx, dy)
+                else:
+                    self.core.camera.rotate(prev_ndc_x, prev_ndc_y, curr_ndc_x, curr_ndc_y)
                 self.start_interaction()
                 self.update()
             elif self.right_mouse_pressed:
+                if abs(dx) > 0.001 or abs(dy) > 0.001:
+                    self.panned_since_press = True
                 self.core.camera.pan(dx, dy)
                 self.start_interaction()
                 self.update()
@@ -364,6 +492,7 @@ class GLViewWidget(QOpenGLWidget):
                 step = 1 if delta > 0 else -1
                 new_val = self.core.slice_indices[idx] + step
                 self.core.slice_indices[idx] = max(0, min(new_val, vol_dims[idx] - 1))
+                self.sig_slice_changed.emit()
                 self.update()
 
     def start_interaction(self):
@@ -385,6 +514,9 @@ class GLViewWidget(QOpenGLWidget):
         self.update()
 
     def contextMenuEvent(self, event):
+        if self.panned_since_press:
+            self.panned_since_press = False
+            return
         menu = QMenu(self)
 
         if self.mode != "3D":

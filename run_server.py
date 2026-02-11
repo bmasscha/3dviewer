@@ -18,14 +18,17 @@ def main():
     print("=" * 60)
     print()
     print("Default ports:")
-    print("  Outbound (Server -> Clients): 5555")
-    print("  Inbound  (Clients -> Server): 5556")
+    parser = argparse.ArgumentParser(description="Acquila ZMQ Server")
+    parser.add_argument("--out-port", type=int, default=50003, help="Port to send commands on (default: 50003)")
+    parser.add_argument("--in-port", type=int, default=50002, help="Port to receive feedback on (default: 50002)")
+    args = parser.parse_args()
     print()
     print("Press Ctrl+C to stop the server...")
     print()
     
-    # Create and start the server
-    server = AcquilaServer()
+    # Create and start server
+    # Outbound=50003 (Viewer's Inbound), Inbound=50002 (Viewer's Outbound)
+    server = AcquilaServer(outbound_port=50003, inbound_port=50002)
     
     # Handle Ctrl+C gracefully
     def signal_handler(sig, frame):

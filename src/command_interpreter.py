@@ -1,19 +1,38 @@
 import re
 import json
 import logging
+import os
+import llm_provider
 
 class CommandInterpreter:
-    def __init__(self):
+    def __init__(self, provider_type="ollama"):
         self.logger = logging.getLogger(__name__)
         self.last_action = None
         self.history = [] # For UI display
-        self.context = None # Ollama native context tokens
-        self.model_name = "llama3.2" # Default model
+        self.context = None # Provider native context
+        self.provider = None
+        self.set_provider(provider_type)
+        self.commands_prompt = self._load_commands_file()
+        if self.provider:
+            self.provider.system_prompt = self.commands_prompt
 
-    def interpret(self, text):
+    def set_provider(self, provider_type, model_name=None):
+        """Switches the active LLM provider."""
+        if provider_type.lower() == "ollama":
+            self.provider = llm_provider.OllamaProvider(model_name or "gemma3:1b")
+        elif provider_type.lower() == "gemini":
+            self.provider = llm_provider.GeminiProvider(model_name or "gemini-2.0-flash")
+        else:
+            raise ValueError(f"Unknown provider type: {provider_type}")
+        self.context = None # Reset context on provider switch
+        if hasattr(self, 'commands_prompt'):
+            self.provider.system_prompt = self.commands_prompt
+
+    def interpret(self, text, state=None):
         """
         Interprets a text command and returns (action_dict, response_message).
         """
+        self.current_state = state # Store for llm parsing
         raw_text = text.strip()
         text = raw_text.lower()
         
@@ -29,15 +48,33 @@ class CommandInterpreter:
         if any(w in text for w in ['status', 'diagnostics', 'check']):
             return self._run_diagnostics()
         
-        # User manual model override: "set model gemma:1b"
-        model_match = re.search(r"set model ([\w\.-:]+)", text)
+        # User manual model override: "set model gemini-1.5-flash"
+        model_match = re.search(r"set model ([\w\-.:]+)", text)
         if model_match:
             new_model = model_match.group(1)
-            self.model_name = new_model
-            return None, f"Model switched to {new_model}. (Ensure it is downloaded in Ollama)"
+            self.provider.model_name = new_model
+            return None, f"Model switched to {new_model} on {self.provider.get_name()}."
 
-        if any(w in text for w in ['help', 'what can you do', 'actions', 'list']):
+        # User manual provider override: "set provider gemini"
+        provider_match = re.search(r"set provider (gemini|ollama)", text)
+        if provider_match:
+            new_provider = provider_match.group(1)
+            try:
+                self.set_provider(new_provider)
+                return None, f"Provider switched to <b>{self.provider.get_name()}</b>."
+            except Exception as e:
+                return None, f"Error switching provider: {str(e)}"
+
+        if any(w in text for w in ['help', 'what can you do', 'actions', 'commands', 'instructions']):
             return self._run_help()
+
+        if 'list' in text or 'show' in text or 'what' in text:
+            if any(w in text for w in ['color', 'scheme', 'palette', 'colormap', 'tf']):
+                return self._run_list_colors()
+            if any(w in text for w in ['mode', 'render']):
+                return self._run_list_modes()
+            if any(w in text for w in ['command', 'action', 'help']):
+                return self._run_help()
 
         # 1. Contextual modifiers and standalone numbers
         modifier = self._get_modifier(text)
@@ -56,6 +93,16 @@ class CommandInterpreter:
         if any(w in text for w in ['more', 'again', 'repeat', 'continue']):
             if self.last_action:
                 action = json.loads(json.dumps(self.last_action))
+                # Smart "more" for absolute setters
+                absolute_actions = ['adjust_quality', 'set_threshold', 'set_density', 'set_opacity']
+                if action['action'] in absolute_actions:
+                    if 'params' in action and 'value' in action['params']:
+                        # If more quality, increase it. If more threshold, increase it.
+                        # Scale based on modifier
+                        scale = 1.2 * modifier if modifier != 1.0 else 1.2
+                        action['params']['value'] *= scale
+                        return action, f"Increasing {action['action']} to {action['params']['value']:.2f}."
+                
                 if modifier != 1.0 and 'params' in action and 'value' in action['params']:
                     action['params']['value'] *= modifier
                 return action, f"Repeating {action['action']} (scale: {modifier}x)."
@@ -105,16 +152,67 @@ class CommandInterpreter:
         
         return None, "I'm sorry, I didn't quite catch that. Try 'zoom in' or ask 'help'."
 
+    def _load_commands_file(self):
+        """Load commands documentation from commands.md file."""
+        try:
+            commands_path = os.path.join(os.path.dirname(__file__), 'commands.md')
+            with open(commands_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except Exception as e:
+            self.logger.warning(f"Could not load commands.md: {e}")
+            return self._get_fallback_prompt()
+
+    def _get_fallback_prompt(self):
+        """Fallback prompt if commands.md cannot be loaded."""
+        return (
+            "You are a helpful AI assistant with viewer control abilities.\n"
+            "You can: answer questions, do math, chat, AND control the 3D viewer.\n\n"
+            "Return JSON: {\"action_dict\": {...} or null, \"response\": \"message\"}\n"
+            "Actions: zoom, rotate, reset, set_mode, set_tf, set_slice, crop, load\n"
+        )
+
     def _run_help(self):
         help_text = (
-            "<b>Camera:</b> zoom, rotate, reset, home<br/>"
-            "<b>Rendering:</b> 'set mode mip/volume/cinematic', 'use viridis colors'<br/>"
-            "<b>Slices:</b> 'move X slice to middle', 'Y slice to 50'<br/>"
-            "<b>AI Model:</b> 'set model gemma3:1b' (switches which AI brain to use)<br/>"
-            "<b>System:</b> status, help<br/>"
-            "<i>Note: 'set model' = AI brain, 'set mode' = rendering style</i>"
+            "<b>Available Commands:</b><br/>"
+            "• <b>View:</b> zoom [in/out], rotate [x/y], reset/home, dual view<br/>"
+            "• <b>Modes:</b> set mode [mip/standard/cinematic/mida/shaded/edge]<br/>"
+            "• <b>Colors:</b> use [colormap] - e.g. 'use bone colors' or 'list color schemes'<br/>"
+            "• <b>Slices:</b> move [X/Y/Z] slice to [percent], crop [X/Y/Z] [min] [max]<br/>"
+            "• <b>Properties:</b> set threshold [0-1], set density/quality/opacity<br/>"
+            "• <b>Advanced:</b> set lighting [fixed/headlamp], specular [0-2], shininess [1-128]<br/>"
+            "• <b>System:</b> status, set provider [gemini/ollama], set model [name]<br/>"
+            "<i>Try natural language: 'make the bone more visible' or 'sharpen the edges'.</i>"
         )
         return None, help_text
+
+    def _run_list_colors(self):
+        # Fetch from state if available, otherwise fallback to hardcoded list matching AppCore
+        colormaps = [
+            "grayscale", "viridis", "plasma", "medical", "legacy_rainbow", 
+            "ct_bone", "ct_soft_tissue", "ct_muscle", "ct_lung", 
+            "legacy_cool_warm", "ct_sandstone", "ct_body",
+            "cet_fire", "cet_rainbow", "cet_coolwarm", "cet_bkr", "cet_bky", 
+            "cet_glasbey", "cet_glasbey_dark", "cet_bgyw", "cet_bmy", "cet_kgy", 
+            "cet_gray", "cet_cwr", "cet_linear_kry_5_95_c72", "cet_blues", "cet_isolum"
+        ]
+        
+        # Group them for better readability
+        standard = ["grayscale", "viridis", "plasma", "medical"]
+        medical = ["ct_bone", "ct_soft_tissue", "ct_muscle", "ct_lung", "ct_sandstone", "ct_body"]
+        perceptual = [c for c in colormaps if c.startswith("cet_")]
+        others = [c for c in colormaps if c not in standard + medical + perceptual]
+
+        result = "<b>Standard Colormaps:</b> " + ", ".join(standard) + "<br/>"
+        result += "<b>Medical/CT:</b> " + ", ".join(medical) + "<br/>"
+        result += "<b>Perceptually Uniform:</b> " + ", ".join(perceptual) + "<br/>"
+        result += "<b>Legacy/Others:</b> " + ", ".join(others)
+        
+        return None, f"Available color schemes:<br/>{result}"
+
+    def _run_list_modes(self):
+        modes = ["MIP", "Standard (Volume)", "Cinematic", "MIDA", "Shaded", "Edge Enhanced"]
+        result = "• " + "\n• ".join(modes)
+        return None, f"Available rendering modes:<br/>{result}"
 
     def _get_modifier(self, text):
         scale = 1.0
@@ -125,24 +223,20 @@ class CommandInterpreter:
         return scale
 
     def _run_diagnostics(self):
-        import urllib.request
-        # Force 127.0.0.1 and disable proxies for Windows 11 stability
-        url = "http://127.0.0.1:11434/api/tags"
-        try:
-            proxy_handler = urllib.request.ProxyHandler({})
-            opener = urllib.request.build_opener(proxy_handler)
-            with opener.open(url, timeout=1.0) as response:
-                data = json.loads(response.read().decode('utf-8'))
-                models = [m['name'] for m in data.get('models', [])]
-                model_str = ", ".join(models) if models else "None"
-                
-                # If current model not in list, suggest one
-                if self.model_name not in [m.split(':')[0] for m in models] and self.model_name not in models and models:
-                    self.model_name = models[0] # Auto-pick if current is missing
-                
-                return None, f"Ollama is RUNNING. Active Model: <b>{self.model_name}</b>. Available: {model_str}. (Use 'set model [name]' to switch)"
-        except Exception as e:
-            return None, f"<b>AI DISCONNECTED:</b> {str(e)} (Check firewall/port 11434)"
+        # Provider diagnostics
+        if isinstance(self.provider, llm_provider.OllamaProvider):
+            models = self.provider.get_available_models()
+            model_str = ", ".join(models) if models else "None"
+            status = "RUNNING" if models else "NOT RESPONDING"
+            return None, f"Ollama is {status}. Active Model: <b>{self.provider.model_name}</b>. Available: {model_str}."
+        elif isinstance(self.provider, llm_provider.GeminiProvider):
+            api_key_status = "PRESENT" if self.provider.api_key else "MISSING"
+            models = self.provider.get_available_models()
+            model_str = ", ".join(models[:10]) # Show first 10
+            if len(models) > 10: model_str += "..."
+            return None, f"Gemini Active. Model: <b>{self.provider.model_name}</b>. API Key: {api_key_status}. Available: {model_str}"
+        
+        return None, "Unknown provider diagnostics."
 
     def _get_default_message(self, action):
         a = action.get('action')
@@ -158,95 +252,65 @@ class CommandInterpreter:
         return "Executing."
 
     def _try_llm_parsing(self, text):
-        import urllib.request
-        import urllib.error
-        
-        # Force 127.0.0.1 and disable proxies for Windows 11 stability
-        url = "http://127.0.0.1:11434/api/generate"
-        
-        # This is the "Manual" for the LLM
-        system_prompt = (
-            "You are a helpful AI assistant with viewer control abilities.\n"
-            "You can: answer questions, do math, chat, AND control the 3D viewer.\n\n"
-            "### AVAILABLE ACTIONS:\n"
-            "1. 'zoom': Move camera closer/further.\n"
-            "   - Params: {'value': float} (+ for in, - for out)\n"
-            "2. 'rotate': Orbit camera around data.\n"
-            "   - Params: {'axis': 'x'|'y', 'value': float} (degrees, left/right=y, up/down=x)\n"
-            "3. 'reset': Return to default view.\n"
-            "4. 'set_mode': Change rendering mode.\n"
-            "   - Params: {'mode': 'mip'|'volume'|'cinematic'|'mida'}\n"
-            "5. 'set_tf': Change transfer function (color map).\n"
-            "   - Params: {'tf': 'grayscale'|'viridis'|'plasma'|'medical'|'legacy_rainbow'|'legacy_cool_warm'|'cet_fire'|'cet_rainbow'|'cet_coolwarm'|'cet_glasbey'|'cet_glasbey_dark'}\n"
-            "6. 'set_slice': Position orthogonal slice.\n"
-            "   - Params: {'axis': 'x'|'y'|'z', 'value': int} OR {'axis': 'x'|'y'|'z', 'percent': float}\n"
-            "7. 'set_lighting': Change lighting mode.\n"
-            "   - Params: {'mode': 'fixed'|'headlamp'}\n"
-            "8. 'adjust_quality': Modify sampling rate.\n"
-            "   - Params: {'value': float} (1.0=normal, 2.0=high, 0.5=fast)\n"
-            "9. 'crop': Clip/crop the volume.\n"
-            "   - Params: {'axis': 'x'|'y'|'z', 'min': float, 'max': float} (normalized 0.0 to 1.0)\n\n"
-            "### RULES:\n"
-            "- Return JSON: {\"action_dict\": {...} or null, \"response\": \"message\"}\n"
-            "- For viewer control: set action_dict with command\n"
-            "- For chat/questions: set action_dict=null, answer helpfully\n"
-            "- Be friendly and conversational!\n"
-        )
-        
-        payload = {
-            "model": self.model_name,
-            "prompt": f"{system_prompt}\nUser: {text}\nJSON:",
-            "stream": False,
-            "context": self.context
+        # Construct the prompt based on provider capabilities
+        state_str = ""
+        if hasattr(self, 'current_state') and self.current_state:
+            state_str = f"\nCurrent Viewer State: {json.dumps(self.current_state)}"
+
+        if isinstance(self.provider, llm_provider.GeminiProvider):
+            # Gemini uses system_instruction for the instructions
+            prompt = f"{state_str}\nUser: {text}\nJSON:"
+        else:
+            # Fallback for Ollama/others that might need instructions in the main prompt
+            system_prompt = self.commands_prompt
+            prompt = f"{system_prompt}\n{state_str}\nUser: {text}\nJSON:"
+
+        options = {
+            "temperature": 0.0,
+            "num_predict": 128,
+            "stop": ["User:", "\n\n"]
         }
         
-        try:
-            data = json.dumps(payload).encode('utf-8')
-            req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
-            
-            proxy_handler = urllib.request.ProxyHandler({})
-            opener = urllib.request.build_opener(proxy_handler)
-            
-            with opener.open(req, timeout=15.0) as response:
-                result = json.loads(response.read().decode('utf-8'))
-                self.context = result.get('context')
-                response_text = result.get('response', '').strip()
-                
-                # Try to extract JSON from the response
-                res_data = None
-                # Look for JSON object in the response
-                json_match = re.search(r'\{[^{}]*"action_dict"[^{}]*\}', response_text, re.DOTALL)
-                if json_match:
-                    try:
-                        res_data = json.loads(json_match.group(0))
-                    except json.JSONDecodeError:
-                        pass
-                
-                # If no valid JSON found, treat as pure chat
-                if not res_data or not isinstance(res_data, dict):
-                    # Pure conversational response
-                    self.history.append({"role": "user", "content": text})
-                    self.history.append({"role": "assistant", "content": response_text})
-                    return {"action_dict": None, "response": response_text}
-                
-                # Double-check action_dict
-                action = res_data.get('action_dict')
-                if isinstance(action, str):
-                    # Small models often send "null" or the action name as a string
-                    if action.lower() in ['null', 'none', '']:
-                        res_data['action_dict'] = None
-                    else:
-                        # Attempt to fix: if they sent "zoom", they forgot the params
-                        res_data['action_dict'] = None # Better to do nothing than crash
-                elif action and not isinstance(action, dict):
-                    return {"error": f"<b>AI DATA ERROR:</b> Invalid structure ({type(action).__name__})"}
+        result = self.provider.generate(prompt, context=self.context, options=options)
+        
+        if result.get('error'):
+            return result
 
-                # Success - log and update state
-                self.history.append({"role": "user", "content": text})
-                self.history.append({"role": "assistant", "content": res_data.get('response', '')})
-                return res_data
-        except Exception as e:
-            return {"error": f"Connection Error: {str(e)}"}
+        self.context = result.get('context')
+        response_text = result.get('response', '').strip()
+        
+        # Try to extract JSON from the response
+        res_data = None
+        # Look for JSON object in the response
+        json_match = re.search(r'\{[^{}]*"action_dict"[^{}]*\}', response_text, re.DOTALL)
+        if json_match:
+            try:
+                res_data = json.loads(json_match.group(0))
+            except json.JSONDecodeError:
+                pass
+        
+        # If no valid JSON found, treat as pure chat
+        if not res_data or not isinstance(res_data, dict):
+            # Pure conversational response
+            self.history.append({"role": "user", "content": text})
+            self.history.append({"role": "assistant", "content": response_text})
+            return {"action_dict": None, "response": response_text}
+        
+        # Double-check action_dict
+        action = res_data.get('action_dict')
+        if isinstance(action, str):
+            # Small models often send "null" or the action name as a string
+            if action.lower() in ['null', 'none', '']:
+                res_data['action_dict'] = None
+            else:
+                res_data['action_dict'] = None # Better to do nothing than crash
+        elif action and not isinstance(action, dict):
+            return {"error": f"<b>AI DATA ERROR:</b> Invalid structure ({type(action).__name__})"}
+
+        # Success - log and update state
+        self.history.append({"role": "user", "content": text})
+        self.history.append({"role": "assistant", "content": res_data.get('response', '')})
+        return res_data
 
     def _try_regex_parsing(self, text, raw_text):
         # 1. Load Folder (Highest Priority to avoid path shadowing)
@@ -361,6 +425,16 @@ class CommandInterpreter:
         if re.search(r'\bthreshold\b', text):
             return {'action': 'set_threshold', 'params': {'value': val_from_text if val_from_text is not None else 0.05}}
             
+        # Quality / Sampling commands
+        if any(re.search(r'\b' + w + r'\b', text) for w in ['quality', 'sampling', 'resolution']):
+            # If "increase" or "better", and no number, suggest 1.5x
+            if any(w in text for w in ['increase', 'better', 'higher', 'more']) and val_from_text is None:
+                return {'action': 'adjust_quality', 'params': {'value': 1.5}}
+            # If "decrease" or "lower", and no number, suggest 0.5x
+            if any(w in text for w in ['decrease', 'lower', 'faster', 'less']) and val_from_text is None:
+                return {'action': 'adjust_quality', 'params': {'value': 0.5}}
+            return {'action': 'adjust_quality', 'params': {'value': val_from_text if val_from_text is not None else 1.0}}
+
         # Density / Opacity commands
         if any(re.search(r'\b' + w + r'\b', text) for w in ['density', 'opacity']):
             return {'action': 'set_density', 'params': {'value': val_from_text if val_from_text is not None else 50.0}}

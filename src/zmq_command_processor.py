@@ -37,49 +37,79 @@ class ZMQCommandProcessor:
         self.commands: Dict[str, Callable] = {
             # Data loading
             "load_data": self._cmd_load_data,
+            "load data": self._cmd_load_data,
+            "load": self._cmd_load_data,
             
             # Rendering
             "set_rendering_mode": self._cmd_set_rendering_mode,
+            "set_mode": self._cmd_set_rendering_mode,
+            "set mode": self._cmd_set_rendering_mode,
             "set_transfer_function": self._cmd_set_transfer_function,
+            "set_tf": self._cmd_set_transfer_function,
+            "set tf": self._cmd_set_transfer_function,
+            "set transfer function": self._cmd_set_transfer_function,
             "set_threshold": self._cmd_set_threshold,
+            "set threshold": self._cmd_set_threshold,
             "set_density": self._cmd_set_density,
+            "set density": self._cmd_set_density,
             
             # Camera
             "rotate": self._cmd_rotate,
             "zoom": self._cmd_zoom,
             "reset_camera": self._cmd_reset_camera,
+            "reset camera": self._cmd_reset_camera,
+            "reset": self._cmd_reset_camera,
             "set_fov": self._cmd_set_fov,
+            "set fov": self._cmd_set_fov,
+            "fov": self._cmd_set_fov,
             
             # Slicing
             "set_slice": self._cmd_set_slice,
+            "set slice": self._cmd_set_slice,
+            "slice": self._cmd_set_slice,
             
             # Lighting & Quality
             "set_lighting": self._cmd_set_lighting,
+            "set lighting": self._cmd_set_lighting,
             "set_quality": self._cmd_set_quality,
+            "set quality": self._cmd_set_quality,
+            "quality": self._cmd_set_quality,
             
             # Clipping
             "crop": self._cmd_crop,
             
             # Shading
             "set_specular": self._cmd_set_specular,
+            "set specular": self._cmd_set_specular,
             "set_shininess": self._cmd_set_shininess,
+            "set shininess": self._cmd_set_shininess,
             "set_gradient_weight": self._cmd_set_gradient_weight,
+            "set gradient weight": self._cmd_set_gradient_weight,
             
             # Status
             "get_status": self._cmd_get_status,
+            "get status": self._cmd_get_status,
+            "status": self._cmd_get_status,
+            
+            # Generic AI command support
+            "exec": self._cmd_exec,
+            "command": self._cmd_exec,
         }
+    
+    def _cmd_exec(self, data: dict) -> dict:
+        """Execute a text command using the AI interpreter. arg1=text"""
+        text = data.get("arg1", "")
+        if not text:
+            return {"success": False, "message": "ERROR: No command text provided"}
+        
+        success, message = self.app_core.execute_command_text(text)
+        return {"success": success, "message": message}
     
     def process(self, command_data: dict) -> dict:
         """
         Process a ZMQ command and return result dict.
-        
-        Args:
-            command_data: Dict with 'command', 'arg1', 'arg2', etc.
-            
-        Returns:
-            Dict with 'success', 'message', and optionally 'data'.
         """
-        cmd = command_data.get("command", "")
+        cmd = str(command_data.get("command", "")).strip().lower()
         
         handler = self.commands.get(cmd)
         if handler:

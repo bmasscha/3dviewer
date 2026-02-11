@@ -19,12 +19,13 @@ class ViewerZMQClient(QObject):
     Connects to the Acquila ZMQ Server to receive commands.
     """
     # Signals must be defined at class level
-    sig_load_data = pyqtSignal(str)
-    sig_set_tf = pyqtSignal(str) # payload: "name|slot|uuid"
-    sig_exec_command = pyqtSignal(str) # command_text
+    sig_load_data = pyqtSignal(dict)
+    sig_set_tf = pyqtSignal(dict)
+    sig_exec_command = pyqtSignal(dict)
+    sig_command_processed = pyqtSignal(str, bool, str) # cmd, success, msg
     
     def __init__(self, app_core, server_ip: str = "127.0.0.1", 
-                 inbound_port: int = 5555, outbound_port: int = 5556):
+                 inbound_port: int = 50001, outbound_port: int = 50001):
         """
         Initialize the ZMQ client.
         """
@@ -71,68 +72,107 @@ class ViewerZMQClient(QObject):
         Emits signals for commands that require Main Thread execution.
         """
         try:
-            # Direct print to console for debugging
-            print(f"\n[ZMQ-CLIENT] RECEIVED MESSAGE: {command_data}")
-            
-            cmd = command_data.get("command", "")
+            raw_cmd = command_data.get("command", "")
+            cmd = str(raw_cmd).strip().lower()
             arg1 = command_data.get("arg1", "")
             arg2 = command_data.get("arg2", "")
+            comp_type = command_data.get("comp_type", "other")
+            comp_phys = command_data.get("comp_phys", "3dviewer")
+            component = command_data.get("component", "3dviewer")
+            tick_count = command_data.get("tick count", 0)
             # acquila_zmq uses uppercase 'UUID', handle both cases
             msg_uuid = command_data.get("UUID", "") or command_data.get("uuid", "")
             
+            # Normalize common variants for high-level routing
+            if cmd in ["load data", "load"]: cmd = "load_data"
+            if cmd in ["set tf", "set_tf", "set transfer function"]: cmd = "set_transfer_function"
+
             logger.info(f"Received command: {cmd}, arg1={arg1}, arg2={arg2}")
             
             # Helper to queue feedback/ACK via ZMQ
-            def send_ack(status_msg, status_code="ACK"):
+            def send_feedback(status_msg, reply_type="ACK"):
                 feedback = {
-                    "component": "3dviewer",
-                    "command": cmd,
-                    "UUID": msg_uuid,  # Must be uppercase for AcquilaClient
-                    "status": status_code,
-                    "message": status_msg,
-                    "reply": status_msg,  # Used by AcquilaClient for logging
-                    "sender": "3dviewer",
-                    "reply type": status_code
+                    "component": component,
+                    "comp_phys": comp_phys,
+                    "command": raw_cmd,
+                    "arg1": arg1,
+                    "arg2": arg2,
+                    "reply": status_msg,
+                    "reply type": reply_type,
+                    "comp_type": comp_type,
+                    "tick count": tick_count,
+                    "UUID": msg_uuid  
                 }
-                # print(f"[ZMQ-CLIENT] Sending ACK: {feedback}")
                 self.send_message(feedback)
 
+            # 1. IMMEDIATE RCV (Received) acknowledgment
+            send_feedback("Command received", "RCV")
+
+            # Prepare metadata for signals
+            metadata = {
+                "command": cmd,
+                "raw_command": raw_cmd,
+                "arg1": arg1,
+                "arg2": arg2,
+                "UUID": msg_uuid,
+                "comp_phys": comp_phys,
+                "component": component,
+                "comp_type": comp_type,
+                "tick_count": tick_count
+            }
+            
             # load_data requires Main Thread for OpenGL operations
             if cmd == "load_data":
                 if not arg1:
-                    send_ack("ERROR: No path provided", "ERROR")
+                    send_feedback("ERROR: No path provided", "ERROR")
                     return "ERROR: load_data requires a path argument"
                 
                 print(f"[ZMQ-CLIENT] Requesting load_data on MAIN THREAD: {arg1}")
-                send_ack("Loading dataset...", "PROCESSING")
+                send_feedback("Loading dataset...", "FDB")
                 
-                # EMIT SIGNAL to Main Thread (pass UUID for final ACK)
-                self.sig_load_data.emit(f"{arg1}|{msg_uuid}") 
+                # EMIT SIGNAL to Main Thread
+                self.sig_load_data.emit({**metadata, "path": arg1}) 
                 return "SUCCESS"
 
             # set_transfer_function requires Main Thread for GL texture updates
             if cmd == "set_transfer_function":
                 if not arg1:
-                    send_ack("ERROR: No transfer function name provided", "ERROR")
+                    send_feedback("ERROR: No transfer function name provided", "ERROR")
                     return "ERROR: Missing TF name"
                 
                 print(f"[ZMQ-CLIENT] Requesting set_transfer_function on MAIN THREAD: {arg1}")
-                send_ack("Setting transfer function...", "PROCESSING")
+                send_feedback("Setting transfer function...", "FDB")
                 
-                # Format: "name|slot|uuid"
-                slot_val = arg2 if arg2 else "0"
-                self.sig_set_tf.emit(f"{arg1}|{slot_val}|{msg_uuid}")
+                slot_val = int(arg2) if arg2 and str(arg2).isdigit() else 0
+                self.sig_set_tf.emit({**metadata, "name": arg1, "slot": slot_val})
                 return "SUCCESS"
             
-            # All other commands: use ZMQCommandProcessor
+            # All other commands: generic AI command support?
+            if cmd in ["exec", "command"]:
+                if not arg1:
+                    send_feedback("ERROR: No command text provided", "ERROR")
+                    return "ERROR: Missing command text"
+                
+                print(f"[ZMQ-CLIENT] Requesting AI command on MAIN THREAD: {arg1}")
+                send_feedback("Executing AI command...", "FDB")
+                self.sig_exec_command.emit({**metadata, "text": arg1})
+                return "SUCCESS"
+
+            # All other structured commands: use ZMQCommandProcessor
             result = self.command_processor.process(command_data)
             
-            if result.get("success"):
-                send_ack(result.get("message", "OK"), "ACK")
+            success = result.get("success", False)
+            msg = result.get("message", "")
+            
+            # Emit signal for thread-safe UI synchronization
+            self.sig_command_processed.emit(cmd, success, msg)
+                
+            if success:
+                send_feedback(msg, "ACK")
                 return "SUCCESS"
             else:
-                send_ack(result.get("message", "ERROR"), "ERROR")
-                return f"ERROR: {result.get('message')}"
+                send_feedback(msg, "ERROR")
+                return f"ERROR: {msg}"
                     
         except Exception as e:
             error_msg = f"Exception handling command: {str(e)}"
@@ -154,10 +194,10 @@ class ViewerZMQClient(QObject):
             import time
             import json
             
-            # Using standard ports
-            target_ip = "127.0.0.1"
-            sub_port = 5555 # LISTENING (Server Out)
-            pub_port = 5556 # SENDING (Server In)
+            # Use instance variables instead of hardcoded defaults
+            target_ip = self.server_ip
+            sub_port = self.inbound_port   # LISTENING (Server Out)
+            pub_port = self.outbound_port  # SENDING (Server In)
             
             ctx = zmq.Context()
             

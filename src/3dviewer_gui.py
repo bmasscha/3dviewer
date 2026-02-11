@@ -2,11 +2,12 @@ import sys
 import os
 import traceback
 import logging
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QGridLayout, QLabel, QSlider, 
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                             QHBoxLayout, QGridLayout, QLabel, QSlider,
                              QPushButton, QComboBox, QFileDialog, QFrame,
                              QScrollArea, QLineEdit, QTextEdit, QProgressDialog,
-                             QStackedLayout, QDoubleSpinBox, QSpinBox, QMessageBox)
+                             QStackedLayout, QDoubleSpinBox, QSpinBox, QMessageBox,
+                             QCheckBox)
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QImage, QPainter
 from datetime import datetime
@@ -81,17 +82,57 @@ class FilterWorker(QThread):
 class AIWorker(QThread):
     finished = pyqtSignal(object, str) # returns (action_dict, response_msg)
     
-    def __init__(self, interpreter, text):
+    def __init__(self, interpreter, text, state=None):
         super().__init__()
         self.interpreter = interpreter
         self.text = text
+        self.state = state
         
     def run(self):
         try:
-            action_dict, response_msg = self.interpreter.interpret(self.text)
+            action_dict, response_msg = self.interpreter.interpret(self.text, state=self.state)
             self.finished.emit(action_dict, response_msg)
         except Exception as e:
             self.finished.emit(None, f"Internal Error: {str(e)}")
+
+class CommandInput(QLineEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.history = []
+        self.history_index = -1
+        self.temporary_command = ""
+
+    def add_to_history(self, text):
+        if not text or not text.strip():
+            return
+        # Don't add if same as last
+        if not self.history or self.history[-1] != text:
+            self.history.append(text)
+        self.history_index = -1
+        self.temporary_command = ""
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Up:
+            if not self.history:
+                return
+            if self.history_index == -1:
+                # Save current unfinished input
+                self.temporary_command = self.text()
+                self.history_index = len(self.history) - 1
+            elif self.history_index > 0:
+                self.history_index -= 1
+            self.setText(self.history[self.history_index])
+        elif event.key() == Qt.Key.Key_Down:
+            if self.history_index == -1:
+                return
+            if self.history_index < len(self.history) - 1:
+                self.history_index += 1
+                self.setText(self.history[self.history_index])
+            else:
+                self.history_index = -1
+                self.setText(self.temporary_command)
+        else:
+            super().keyPressEvent(event)
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -104,13 +145,14 @@ class MainWindow(QMainWindow):
         self.setup_ui()
         self.apply_stylesheet()
         
-        # FIXED WIRING: Inbound=5555 (Server's Out), Outbound=5556 (Server's In)
-        self.zmq_client = ViewerZMQClient(self.core, server_ip="127.0.0.1", inbound_port=5555, outbound_port=5556)
+        # UPDATED PORTS: Inbound=50001 (Server's Out), Outbound=50000 (Server's In)
+        self.zmq_client = ViewerZMQClient(self.core, server_ip="127.0.0.1", inbound_port=50001, outbound_port=50000)
         
         # Connect new signals for thread-safe execution
         self.zmq_client.sig_load_data.connect(self.handle_zmq_load_data)
         self.zmq_client.sig_set_tf.connect(self.handle_zmq_set_tf)
         self.zmq_client.sig_exec_command.connect(self.handle_zmq_exec_command)
+        self.zmq_client.sig_command_processed.connect(self._update_gui_after_zmq_command)
         
         # Legacy callback (optional now, but kept for logging)
         self.zmq_client.set_command_callback(self.on_zmq_command_received)
@@ -183,6 +225,7 @@ class MainWindow(QMainWindow):
             # Connect export slices signal (only for orthogonal views)
             if view.mode != "3D":
                 view.sig_export_slices.connect(lambda mode, v=view: self.on_request_export_slices(v, mode))
+                view.sig_slice_changed.connect(self.sync_ui_to_core)
             else:
                 view.sig_record_movie.connect(self.on_request_record_movie)
 
@@ -329,7 +372,6 @@ class MainWindow(QMainWindow):
         vbox.addWidget(title)
         
         # Enable Toggle
-        from PyQt6.QtWidgets import QCheckBox
         self.chk_vpc = QCheckBox("Enable VPC Filter")
         self.chk_vpc.setChecked(self.core.vpc_enabled)
         self.chk_vpc.toggled.connect(self.on_vpc_toggled)
@@ -352,6 +394,10 @@ class MainWindow(QMainWindow):
 
     def on_vpc_toggled(self, checked):
         self.core.vpc_enabled = checked
+        self.update_views()
+
+    def on_scale_bar_toggled(self, checked):
+        self.core.show_scale_bar = checked
         self.update_views()
 
     def on_vpc_distance_changed(self, val):
@@ -716,11 +762,23 @@ class MainWindow(QMainWindow):
             self.on_threshold_changed, transform=lambda v: f"{v/100.0:.2f}"
         )
         
-        # Slices
-        self.slider_x, self.label_x = self.create_named_slider(vbox, "Slice X", 0, self.on_slice_x_changed)
-        self.slider_y, self.label_y = self.create_named_slider(vbox, "Slice Y", 1, self.on_slice_y_changed)
-        self.slider_z, self.label_z = self.create_named_slider(vbox, "Slice Z", 2, self.on_slice_z_changed)
-        
+        # Slices (Medical equivalents: Sagittal=X, Coronal=Y, Axial=Z)
+        self.slider_x, self.label_x = self.create_named_slider(vbox, "Sagittal (X)", 0, self.on_slice_x_changed)
+        self.slider_y, self.label_y = self.create_named_slider(vbox, "Coronal (Y)", 1, self.on_slice_y_changed)
+        self.slider_z, self.label_z = self.create_named_slider(vbox, "Axial (Z)", 2, self.on_slice_z_changed)
+
+        # Scale Bar Toggle
+        self.chk_scale_bar = QCheckBox("Show Scale Bar")
+        self.chk_scale_bar.setChecked(self.core.show_scale_bar)
+        self.chk_scale_bar.toggled.connect(self.on_scale_bar_toggled)
+        self.chk_scale_bar.setStyleSheet("color: white; margin-top: 10px;")
+        vbox.addWidget(self.chk_scale_bar)
+
+        # Geometry Info Label
+        self.geometry_label = QLabel("Voxel size: N/A")
+        self.geometry_label.setStyleSheet("font-size: 10px; color: #888888; padding: 2px;")
+        vbox.addWidget(self.geometry_label)
+
         layout.addWidget(container)
 
 
@@ -1003,7 +1061,7 @@ class MainWindow(QMainWindow):
         self.cmd_log.setStyleSheet("background-color: #222; color: #CCC; font-size: 11px; border: 1px solid #444;")
         vbox.addWidget(self.cmd_log)
         
-        self.cmd_input = QLineEdit()
+        self.cmd_input = CommandInput()
         self.cmd_input.setPlaceholderText("Type 'zoom in', 'rotate 90'...")
         self.cmd_input.returnPressed.connect(self.on_command_submit)
         self.cmd_input.setStyleSheet("padding: 5px; color: white; background-color: #333; border: 1px solid #555;")
@@ -1023,6 +1081,7 @@ class MainWindow(QMainWindow):
             return
             
         self.cmd_log.append(f"<b style='color:#3498DB'>You:</b> {text}")
+        self.cmd_input.add_to_history(text)
         
         # Disable input while processing
         self.cmd_input.setEnabled(False)
@@ -1030,7 +1089,7 @@ class MainWindow(QMainWindow):
         self.cmd_log.append("<i style='color:#888'>AI is thinking...</i>")
         
         # Start worker thread
-        self.worker = AIWorker(self.core.command_interpreter, text)
+        self.worker = AIWorker(self.core.command_interpreter, text, state=self.core.get_state())
         self.worker.finished.connect(self.on_ai_finished)
         self.worker.start()
 
@@ -1118,6 +1177,7 @@ class MainWindow(QMainWindow):
                 s.setEnabled(True)
                 s.setValue(v)
             self.folder_label.setText(getattr(self, 'current_folder', "Loaded via Command"))
+            self.update_geometry_label()
 
         # Sync TF selection
         self.combo_tf.setCurrentText(self.core.current_tf_name)
@@ -1125,53 +1185,71 @@ class MainWindow(QMainWindow):
         # Note: We don't have separate sliders for overlay in the side panel yet,
         # but the core state IS updated.
 
-    def handle_zmq_load_data(self, payload: str):
+    def handle_zmq_load_data(self, metadata: dict):
         """
         Slot to handle load_data request from ZMQ thread on the Main Thread.
-        Payload format: "path|uuid"
         """
-        try:
-            path, uuid = payload.split("|", 1)
-        except ValueError:
-            path = payload
-            uuid = ""
+        path = metadata.get("path", "")
+        uuid = metadata.get("UUID", "")
             
         logging.info(f"ZMQ requested load_data: {path}")
-        success = self.core.load_dataset(path)
         
-        status = "SUCCESS" if success else "ERROR"
+        # Helper to send standardized feedback echoing all metadata
+        def send_zmq_feedback(msg, reply_type):
+            if self.zmq_client:
+                self.zmq_client.send_message({
+                    "component": metadata.get("component", "3dviewer"),
+                    "comp_phys": metadata.get("comp_phys", "3dviewer"),
+                    "command": metadata.get("raw_command", "load_data"),
+                    "arg1": metadata.get("arg1", ""),
+                    "arg2": metadata.get("arg2", ""),
+                    "reply": msg,
+                    "reply type": reply_type,
+                    "comp_type": metadata.get("comp_type", "other"),
+                    "tick count": metadata.get("tick_count", 0),
+                    "UUID": uuid,
+                    "sender": "3dviewer"
+                })
+
+        # Progress callback to send FDB messages via ZMQ
+        def zmq_progress_cb(msg):
+            send_zmq_feedback(msg, "FDB")
+        
+        success = self.core.load_dataset(path, progress_callback=zmq_progress_cb)
+        
         message = f"Successfully loaded from {path}" if success else f"Failed to load from {path}"
         
-        # Send FINAL ACK via ZMQ Queue
-        if self.zmq_client:
-            self.zmq_client.send_message({
-                "component": "3dviewer",
-                "command": "load_data",
-                "UUID": uuid,
-                "status": "ACK", # Or "COMPLETED"
-                "message": message,
-                "reply": message,
-                "sender": "3dviewer",
-                "reply type": "ACK"
-            })
+        # Send FINAL ACK
+        send_zmq_feedback(message, "ACK" if success else "ERROR")
             
         self.on_zmq_command_received("load_data", success, message)
 
-    def handle_zmq_set_tf(self, payload: str):
+    def handle_zmq_set_tf(self, metadata: dict):
         """
         Slot to handle set_transfer_function on Main Thread.
-        Payload: "name|slot|uuid"
         """
-        try:
-            name, slot_str, uuid = payload.split("|", 2)
-            slot = int(slot_str)
-        except ValueError:
-            name = payload
-            slot = 0
-            uuid = ""
+        name = metadata.get("name", "")
+        slot = metadata.get("slot", 0)
+        uuid = metadata.get("UUID", "")
             
         logging.info(f"ZMQ requested set_transfer_function: {name} (slot {slot})")
         
+        def send_zmq_feedback(msg, reply_type):
+            if self.zmq_client:
+                self.zmq_client.send_message({
+                    "component": metadata.get("component", "3dviewer"),
+                    "comp_phys": metadata.get("comp_phys", "3dviewer"),
+                    "command": metadata.get("raw_command", "set_transfer_function"),
+                    "arg1": metadata.get("arg1", ""),
+                    "arg2": metadata.get("arg2", ""),
+                    "reply": msg,
+                    "reply type": reply_type,
+                    "comp_type": metadata.get("comp_type", "other"),
+                    "tick count": metadata.get("tick_count", 0),
+                    "UUID": uuid,
+                    "sender": "3dviewer"
+                })
+
         # Execute on Main Thread (GL context is valid here)
         success = False
         message = ""
@@ -1188,66 +1266,56 @@ class MainWindow(QMainWindow):
             success = False
             message = f"Error setting TF: {str(e)}"
             
-        # Send FINAL ACK via ZMQ Queue
-        if self.zmq_client:
-            self.zmq_client.send_message({
-                "component": "3dviewer",
-                "command": "set_transfer_function",
-                "UUID": uuid,
-                "status": "ACK",
-                "message": message,
-                "reply": message,
-                "sender": "3dviewer",
-                "reply type": "ACK"
-            })
+        # Send FINAL ACK
+        send_zmq_feedback(message, "ACK" if success else "ERROR")
             
         self.on_zmq_command_received("set_transfer_function", success, message)
 
-    def handle_zmq_exec_command(self, payload: str):
+    def handle_zmq_exec_command(self, metadata: dict):
         """
         Slot to handle AI command execution from ZMQ thread on the Main Thread.
-        Payload format: "command_text|uuid"
         """
-        try:
-            command_text, uuid = payload.split("|", 1)
-        except ValueError:
-            command_text = payload
-            uuid = ""
+        command_text = metadata.get("text", "")
+        uuid = metadata.get("UUID", "")
             
         logging.info(f"ZMQ requested command: {command_text}")
+        
+        def send_zmq_feedback(msg, reply_type):
+            if self.zmq_client:
+                self.zmq_client.send_message({
+                    "component": metadata.get("component", "3dviewer"),
+                    "comp_phys": metadata.get("comp_phys", "3dviewer"),
+                    "command": metadata.get("raw_command", command_text),
+                    "arg1": metadata.get("arg1", ""),
+                    "arg2": metadata.get("arg2", ""),
+                    "reply": msg,
+                    "reply type": reply_type,
+                    "comp_type": metadata.get("comp_type", "other"),
+                    "tick count": metadata.get("tick_count", 0),
+                    "UUID": uuid,
+                    "sender": "3dviewer"
+                })
+
+        # Immediate feedback that processing has started on main thread
+        send_zmq_feedback("Executing AI command on main thread...", "FDB")
+
         success, message = self.core.execute_command_text(command_text)
         
-        # Send FINAL ACK via ZMQ Queue
-        if self.zmq_client:
-            self.zmq_client.send_message({
-                "component": "3dviewer",
-                "command": command_text, 
-                "UUID": uuid,
-                "status": "ACK",
-                "message": message,
-                "reply": message,
-                "sender": "3dviewer",
-                "reply type": "ACK"
-            })
+        # Send FINAL ACK
+        send_zmq_feedback(message, "ACK" if success else "ERROR")
             
         self.on_zmq_command_received(command_text, success, message)
 
     def on_zmq_command_received(self, command: str, success: bool, message: str):
         """
         Callback invoked when a ZMQ command is received and processed.
-        This runs in the ZMQ thread, so we need to be careful with GUI updates.
-        
-        Args:
-            command: The command that was executed
-            success: Whether the command succeeded
-            message: Result message
+        (This is now primarily used for immediate logging).
         """
         # Log the command result
         logging.info(f"ZMQ Command '{command}': {'SUCCESS' if success else 'FAILED'} - {message}")
         
-        # Schedule GUI update on the main thread using QTimer
-        # This is thread-safe and ensures GUI updates happen on the main thread
-        QTimer.singleShot(0, lambda: self._update_gui_after_zmq_command(command, success, message))
+        # Trigger UI update (if called from main thread, this is direct; if not, we should've used signals)
+        self._update_gui_after_zmq_command(command, success, message)
     
     def _update_gui_after_zmq_command(self, command: str, success: bool, message: str):
         """
@@ -1281,7 +1349,8 @@ class MainWindow(QMainWindow):
                     self.slider_z.setValue(self.core.slice_indices[2])
                     
                     self.folder_label.setText("Loaded via ZMQ")
-                    
+                    self.update_geometry_label()
+
                     # Initialize TF
                     self.core.set_transfer_function(self.core.current_tf_name)
             
@@ -1407,6 +1476,7 @@ class MainWindow(QMainWindow):
                 self.slider_z.setValue(self.core.slice_indices[2])
                 
                 self.folder_label.setText(f"Loaded: {os.path.basename(folder_path)}")
+                self.update_geometry_label()
                 self.update_views()
                 logging.info(f"Volume loaded and initialized: {folder_path}")
             else:
@@ -1572,6 +1642,24 @@ class MainWindow(QMainWindow):
         self.view_coronal.update()
         self.view_sagittal.update()
         self.view_3d.update()
+
+    def update_geometry_label(self):
+        """Update the geometry info label with voxel size from loaded dataset."""
+        voxel_size = self.core.geometry.get('voxel_size')
+        if voxel_size:
+            if voxel_size >= 1:
+                text = f"Voxel: {voxel_size:.3f} mm"
+            else:
+                text = f"Voxel: {voxel_size * 1000:.1f} µm"
+
+            # Add scanner info if available
+            scanner = self.core.geometry.get('scanner_type')
+            if scanner:
+                text += f" | {scanner}"
+
+            self.geometry_label.setText(text)
+        else:
+            self.geometry_label.setText("Voxel size: N/A (no settings file)")
 
     def apply_stylesheet(self):
         self.setStyleSheet("""

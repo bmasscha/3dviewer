@@ -1,6 +1,7 @@
 import os
 import sys
 import glob
+import configparser
 import numpy as np
 import tifffile
 import h5py
@@ -13,6 +14,7 @@ class VolumeLoader:
         self.width = 0
         self.height = 0
         self.depth = 0
+        self.geometry = None  # Will hold CT geometry from settings file
 
     def estimate_memory_usage(self, width, height, depth, use_8bit=False):
         """Estimate memory usage in bytes for the volume and OpenGL texture."""
@@ -168,7 +170,17 @@ class VolumeLoader:
              self.data = np.ascontiguousarray(self.data)
 
         print(f"Memory usage: {self.data.nbytes / (1024*1024):.2f} MB")
-        
+
+        # Try to parse XRE settings file for geometry info
+        self.parse_xre_settings(folder_path)
+
+        # Adjust voxel size if binning was applied
+        if self.geometry and self.geometry.get('voxel_size') and binning_factor > 1:
+            original_voxel = self.geometry['voxel_size']
+            self.geometry['voxel_size'] = original_voxel * binning_factor
+            self.geometry['original_voxel_size'] = original_voxel
+            print(f"Adjusted voxel size for {binning_factor}x binning: {original_voxel} -> {self.geometry['voxel_size']} mm")
+
         return self.data
 
     def load_from_h5(self, file_path, channel_index=0, rescale_range=None, z_range=None, binning_factor=1, use_8bit=False, progress_callback=None, **kwargs):
@@ -375,4 +387,93 @@ class VolumeLoader:
             }
         except Exception as e:
             print(f"Error in get_quick_stats: {e}")
+            return None
+
+    def parse_xre_settings(self, folder_path):
+        """
+        Search for and parse XRE settings file (data settings xre*.txt) in the folder
+        or parent folder. Returns a dict with CT geometry parameters.
+        """
+        # Search patterns - check current folder and parent
+        search_paths = [folder_path, os.path.dirname(folder_path)]
+        patterns = ['data settings xre*.txt', 'data settings xre recon*.txt']
+
+        settings_file = None
+        for search_path in search_paths:
+            for pattern in patterns:
+                matches = glob.glob(os.path.join(search_path, pattern))
+                if matches:
+                    settings_file = matches[0]
+                    break
+            if settings_file:
+                break
+
+        if not settings_file:
+            print("No XRE settings file found.")
+            return None
+
+        print(f"Found XRE settings file: {settings_file}")
+
+        try:
+            # Parse as INI file
+            config = configparser.ConfigParser()
+            # Handle the = in values by reading with a custom approach
+            with open(settings_file, 'r', encoding='utf-8', errors='ignore') as f:
+                config.read_file(f)
+
+            geometry = {}
+
+            # Extract CT-parameters IN section
+            if 'CT-parameters IN' in config:
+                ct_params = config['CT-parameters IN']
+
+                # Parse key geometry values (stored as quoted strings)
+                def get_float(key, default=None):
+                    val = ct_params.get(key, default)
+                    if val is not None:
+                        # Remove quotes if present
+                        val = val.strip('"').strip("'")
+                        try:
+                            return float(val)
+                        except ValueError:
+                            return default
+                    return default
+
+                geometry['voxel_size'] = get_float('Voxel size')  # mm
+                geometry['pixel_size'] = get_float('Pixel size')  # mm (detector)
+                geometry['sod'] = get_float('SOD')  # Source-Object Distance (mm)
+                geometry['sdd'] = get_float('SDD')  # Source-Detector Distance (mm)
+                geometry['cor'] = get_float('COR')  # Center of Rotation
+
+                # Calculate magnification if we have SOD and SDD
+                if geometry['sod'] and geometry['sdd']:
+                    geometry['magnification'] = geometry['sdd'] / geometry['sod']
+                    # Cone beam half-angle in degrees
+                    import math
+                    geometry['cone_angle'] = math.degrees(math.atan2(
+                        geometry.get('pixel_size', 0.1) * 500,  # Approximate detector half-width
+                        geometry['sdd']
+                    ))
+
+                print(f"CT Geometry: Voxel={geometry.get('voxel_size', 'N/A')} mm, "
+                      f"SOD={geometry.get('sod', 'N/A')} mm, SDD={geometry.get('sdd', 'N/A')} mm, "
+                      f"Mag={geometry.get('magnification', 'N/A'):.2f}x")
+
+            # Also grab scanner info if available
+            if 'Scan info' in config:
+                geometry['scanner_type'] = config['Scan info'].get('scanner type', '').strip('"')
+                geometry['scan_id'] = config['Scan info'].get('scanID', '').strip('"')
+
+            if 'Tube settings' in config:
+                tube = config['Tube settings']
+                geometry['kv'] = tube.get('kV actual value', '').strip('"')
+                geometry['power'] = tube.get('Target power actual value', '').strip('"')
+
+            self.geometry = geometry
+            return geometry
+
+        except Exception as e:
+            print(f"Error parsing XRE settings: {e}")
+            import traceback
+            traceback.print_exc()
             return None

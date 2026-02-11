@@ -75,12 +75,41 @@ class AppCore:
         self.ray_shader = None
         self.vpc_shader = None
 
+        # CT Geometry (from XRE settings file)
+        self.geometry = {
+            'voxel_size': None,  # mm
+            'pixel_size': None,  # mm (detector)
+            'sod': None,         # Source-Object Distance (mm)
+            'sdd': None,         # Source-Detector Distance (mm)
+            'magnification': None,
+            'cone_angle': None,
+            'scanner_type': None,
+        }
+        self.show_scale_bar = True  # Toggle for scale bar visibility
+
     def set_rendering_mode(self, index, slot=0):
         if 0 <= index < len(self.render_modes):
             if slot == 0:
                 self.rendering_mode = index
             else:
                 self.overlay_rendering_mode = index
+
+    def get_state(self):
+        """Returns a concise dictionary of current viewer state."""
+        return {
+            "mode": self.render_modes[self.rendering_mode],
+            "density": self.volume_density,
+            "threshold": self.volume_threshold,
+            "colormap": self.current_tf_name,
+            "quality": self.sampling_rate,
+            "slices": {
+                "x": self.slice_indices[0],
+                "y": self.slice_indices[1],
+                "z": self.slice_indices[2]
+            },
+            "vpc_enabled": self.vpc_enabled,
+            "has_overlay": self.has_overlay
+        }
 
     def load_shaders(self):
         try:
@@ -124,15 +153,25 @@ class AppCore:
         """
         if data is None:
             return False
-            
+
         d, h, w = data.shape
         slot = 1 if is_overlay else 0
         self.volume_renderer.create_texture(data, w, h, d, slot=slot)
-        
+
         if not is_overlay:
             self.current_dataset_path = path
             self.current_volume_data = data # Store for CPU processing
             self.slice_indices = [w//2, h//2, d//2]
+
+            # Copy geometry from loader if available
+            if self.volume_loader.geometry:
+                self.geometry = self.volume_loader.geometry.copy()
+                print(f"Geometry loaded: voxel_size={self.geometry.get('voxel_size')} mm")
+
+                # Adjust camera FOV based on cone-beam geometry if available
+                if self.geometry.get('sod') and self.geometry.get('sdd'):
+                    self._apply_cone_beam_fov()
+
             # Update camera target to center of volume
             box_size = self.get_box_size(slot=0)
             center = box_size * 0.5
@@ -213,6 +252,56 @@ class AppCore:
         if w == 0: return glm.vec3(1.0)
         max_dim = max(w, h, d)
         return glm.vec3(w/max_dim, h/max_dim, d/max_dim)
+
+    def _apply_cone_beam_fov(self):
+        """
+        Calculate and apply FOV based on CT cone-beam geometry.
+        Uses SOD/SDD to determine the cone angle that matches the scan geometry.
+        """
+        import math
+        sod = self.geometry.get('sod')
+        sdd = self.geometry.get('sdd')
+        pixel_size = self.geometry.get('pixel_size', 0.1)  # mm
+
+        if not sod or not sdd:
+            return
+
+        # Get detector dimensions (approximate from volume dims and magnification)
+        w, h, d = self.volume_renderer.volume_dims[0]
+        mag = sdd / sod
+
+        # Detector half-width in mm (using pixel size and image width)
+        # The voxel count * voxel_size gives object size, multiply by mag for detector size
+        voxel_size = self.geometry.get('voxel_size', pixel_size / mag)
+        object_width = max(w, h) * voxel_size  # Object size in mm
+        detector_half_width = object_width * mag / 2.0
+
+        # Cone half-angle: angle from source to edge of detector
+        cone_half_angle = math.degrees(math.atan2(detector_half_width, sdd))
+
+        # Full cone angle (FOV) - we want the camera to see the full object
+        # The viewing FOV should be based on seeing the object from a reasonable distance
+        # We use a FOV that would show the object naturally
+        suggested_fov = min(60.0, max(20.0, cone_half_angle * 2.0))
+
+        print(f"Cone-beam geometry: SOD={sod:.1f}mm, SDD={sdd:.1f}mm, Mag={mag:.2f}x")
+        print(f"Calculated cone half-angle: {cone_half_angle:.1f}°, Suggested FOV: {suggested_fov:.1f}°")
+
+        # Apply the FOV
+        self.camera.fov = suggested_fov
+        self.geometry['cone_angle'] = cone_half_angle * 2.0
+
+    def get_physical_dimensions(self):
+        """
+        Returns the physical dimensions of the volume in mm (if geometry is available).
+        Returns (width_mm, height_mm, depth_mm) or None if no geometry.
+        """
+        voxel_size = self.geometry.get('voxel_size')
+        if not voxel_size:
+            return None
+
+        w, h, d = self.volume_renderer.volume_dims[0]
+        return (w * voxel_size, h * voxel_size, d * voxel_size)
 
     def set_transfer_function(self, name, slot=0):
         if name in self.tf_names:
@@ -331,7 +420,7 @@ class AppCore:
                 return True, response_msg or f"Lighting set to {mode_name}."
             return False, f"Unknown lighting mode: {mode_name}"
         
-        elif action == 'adjust_quality':
+        elif action == 'adjust_quality' or action == 'set_quality':
             value = float(params.get('value', 1.0))
             self.sampling_rate = max(0.1, min(value, 5.0))
             return True, response_msg or f"Quality set to {value}x."

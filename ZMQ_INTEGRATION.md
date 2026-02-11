@@ -13,7 +13,7 @@ The 3D Viewer acts as a **ZMQ client** with:
 
 1. **ZMQ Server** (external, must be running separately)
    - Manages message routing between components
-   - Default ports: 5555 (inbound), 5556 (outbound)
+   - Default ports: 50003 (inbound), 50002 (outbound)
 
 2. **3D Viewer Client** (this application)
    - Listens for commands from script_runner
@@ -185,7 +185,7 @@ Result: Successfully loaded dataset from: /path/to/data
 **Solutions**:
 
 - Verify component name is exactly `"3dviewer"`
-- Check server IP and ports match (default: 127.0.0.1:5555/5556)
+- Check server IP and ports match (default: 127.0.0.1:50003/50002)
 - Ensure ZMQ server is running before starting the viewer
 - Check firewall settings
 
