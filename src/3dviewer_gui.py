@@ -36,15 +36,38 @@ class LoadVolumeThread(QThread):
     def run(self):
         def progress_cb(msg):
             self.progress.emit(msg)
-            
+
         try:
             if os.path.isfile(self.folder_path):
-                data = self.loader.load_from_h5(self.folder_path, progress_callback=progress_cb, **self.kwargs)
+                # Check if multi-channel loading requested
+                if self.kwargs.get('load_all_channels', False):
+                    # Multi-channel HDF5 load
+                    # Remove load_all_channels from kwargs before passing to loader
+                    loader_kwargs = {k: v for k, v in self.kwargs.items() if k != 'load_all_channels'}
+                    data = self.loader.load_all_channels_from_h5(
+                        self.folder_path,
+                        progress_callback=progress_cb,
+                        **loader_kwargs
+                    )
+                else:
+                    # Single channel HDF5 load
+                    data = self.loader.load_from_h5(
+                        self.folder_path,
+                        progress_callback=progress_cb,
+                        **self.kwargs
+                    )
             else:
-                data = self.loader.load_from_folder(self.folder_path, progress_callback=progress_cb, **self.kwargs)
+                # TIFF folder load
+                data = self.loader.load_from_folder(
+                    self.folder_path,
+                    progress_callback=progress_cb,
+                    **self.kwargs
+                )
             self.finished.emit(data)
         except Exception as e:
             logging.error(f"LoadVolumeThread error: {e}")
+            import traceback
+            traceback.print_exc()
             self.finished.emit(None) # Signal failure
 
 class FilterWorker(QThread):
@@ -200,7 +223,10 @@ class MainWindow(QMainWindow):
 
         # Command Control
         self.create_command_panel(left_sidebar)
-        
+
+        # Energy Channel Selection (for spectral CT)
+        self.create_channel_panel(left_sidebar)
+
         left_sidebar.addStretch()
         left_scroll.setWidget(left_widget)
         main_layout.addWidget(left_scroll, 1)
@@ -1075,6 +1101,39 @@ class MainWindow(QMainWindow):
         
         layout.addWidget(container)
 
+    def create_channel_panel(self, layout):
+        """Create energy channel selection panel for spectral CT multi-channel data."""
+        container = QFrame()
+        container.setObjectName("SidePanel")
+        vbox = QVBoxLayout(container)
+
+        title = QLabel("ENERGY CHANNELS")
+        title.setObjectName("PanelTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        vbox.addWidget(title)
+
+        # Primary channel selector
+        primary_row = QHBoxLayout()
+        primary_row.addWidget(QLabel("Primary:"))
+        self.combo_primary_channel = QComboBox()
+        self.combo_primary_channel.currentIndexChanged.connect(self.on_primary_channel_changed)
+        primary_row.addWidget(self.combo_primary_channel, 1)
+        vbox.addLayout(primary_row)
+
+        # Overlay channel selector
+        overlay_row = QHBoxLayout()
+        overlay_row.addWidget(QLabel("Overlay:"))
+        self.combo_overlay_channel = QComboBox()
+        self.combo_overlay_channel.addItem("None (Off)")
+        self.combo_overlay_channel.currentIndexChanged.connect(self.on_overlay_channel_changed)
+        overlay_row.addWidget(self.combo_overlay_channel, 1)
+        vbox.addLayout(overlay_row)
+
+        # Initially hidden until multi-channel data loaded
+        container.setVisible(False)
+        self.channel_panel = container
+        layout.addWidget(container)
+
     def on_command_submit(self):
         text = self.cmd_input.text()
         if not text:
@@ -1431,31 +1490,53 @@ class MainWindow(QMainWindow):
         diag = ImportDialog(self.core, self)
         if diag.exec():
             folder = diag.folder_path
+            is_hdf5 = diag.is_hdf5
+            load_all_channels = diag.load_all_channels
             rescale_range = diag.rescale_range
             z_range = diag.z_range
             binning_factor = diag.binning_factor
             use_8bit = diag.use_8bit
             channel_index = diag.channel_index
-            
+
             # Show progress dialog for potentially long operation
             progress = QProgressDialog("Initializing...", "Cancel", 0, 100, self)
             progress.setWindowTitle("Import Progress")
             progress.setWindowModality(Qt.WindowModality.WindowModal)
             progress.setAutoClose(True)
             progress.show()
-            
-            # Start loading thread
-            self.load_thread = LoadVolumeThread(
-                self.core.volume_loader, 
-                folder, 
-                rescale_range=rescale_range,
-                z_range=z_range,
-                binning_factor=binning_factor,
-                use_8bit=use_8bit,
-                channel_index=channel_index
-            )
-            self.load_thread.progress.connect(progress.setLabelText)
-            self.load_thread.finished.connect(lambda data: self.on_volume_loaded_callback(data, folder, progress))
+
+            # Determine loading mode
+            if is_hdf5 and load_all_channels:
+                # Multi-channel loading
+                self.load_thread = LoadVolumeThread(
+                    self.core.volume_loader,
+                    folder,
+                    load_all_channels=True,
+                    rescale_range=rescale_range,
+                    z_range=z_range,
+                    binning_factor=binning_factor,
+                    use_8bit=use_8bit
+                )
+                self.load_thread.progress.connect(progress.setLabelText)
+                self.load_thread.finished.connect(
+                    lambda data: self.on_multichannel_volume_loaded(data, folder, progress)
+                )
+            else:
+                # Single channel loading (existing logic)
+                self.load_thread = LoadVolumeThread(
+                    self.core.volume_loader,
+                    folder,
+                    rescale_range=rescale_range,
+                    z_range=z_range,
+                    binning_factor=binning_factor,
+                    use_8bit=use_8bit,
+                    channel_index=channel_index
+                )
+                self.load_thread.progress.connect(progress.setLabelText)
+                self.load_thread.finished.connect(
+                    lambda data: self.on_volume_loaded_callback(data, folder, progress)
+                )
+
             self.load_thread.start()
 
     def on_volume_loaded_callback(self, data, folder_path, progress_dialog):
@@ -1463,18 +1544,14 @@ class MainWindow(QMainWindow):
         if data is not None:
             # Use AppCore to finalize initialization (GPU upload, state, camera)
             success = self.core.finalize_volume_load(data, folder_path)
-            
+
             if success:
                 # Update UI slider ranges based on new volume
-                vol_w, vol_h, vol_d = self.core.volume_renderer.volume_dims[0]
-                for s, m in [(self.slider_x, vol_w), (self.slider_y, vol_h), (self.slider_z, vol_d)]:
-                    s.setRange(0, m - 1)
-                    s.setEnabled(True)
-                
-                self.slider_x.setValue(self.core.slice_indices[0])
-                self.slider_y.setValue(self.core.slice_indices[1])
-                self.slider_z.setValue(self.core.slice_indices[2])
-                
+                self.update_slice_ranges()
+
+                # Hide channel panel for single-channel data
+                self.channel_panel.setVisible(False)
+
                 self.folder_label.setText(f"Loaded: {os.path.basename(folder_path)}")
                 self.update_geometry_label()
                 self.update_views()
@@ -1483,6 +1560,48 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Init Error", "Failed to initialize volume on GPU.")
         else:
             QMessageBox.critical(self, "Load Error", "Failed to load volume data.")
+
+    def on_multichannel_volume_loaded(self, channel_list, folder_path, progress_dialog):
+        """Handle completion of multi-channel HDF5 load."""
+        progress_dialog.close()
+
+        if channel_list is not None and len(channel_list) > 0:
+            # Use first channel as the data for finalize
+            success = self.core.finalize_volume_load(
+                channel_list[0],  # Primary display data
+                folder_path,
+                is_overlay=False,
+                is_multichannel=True,
+                channel_list=channel_list
+            )
+
+            if success:
+                self.update_slice_ranges()
+                self.populate_channel_selectors()
+                self.channel_panel.setVisible(True)
+                self.folder_label.setText(f"Loaded: {os.path.basename(folder_path)} ({len(channel_list)} channels)")
+                self.update_geometry_label()
+                self.update_views()
+                self.statusBar().showMessage(
+                    f"Loaded {len(channel_list)} energy channels successfully!", 3000
+                )
+                logging.info(f"Multi-channel volume loaded: {folder_path} ({len(channel_list)} channels)")
+            else:
+                QMessageBox.critical(self, "Init Error", "Failed to initialize volume on GPU.")
+        else:
+            QMessageBox.critical(self, "Load Error", "Multi-channel loading failed")
+
+    def update_slice_ranges(self):
+        """Update slice slider ranges based on current volume dimensions."""
+        if 0 in self.core.volume_renderer.volume_dims:
+            vol_w, vol_h, vol_d = self.core.volume_renderer.volume_dims[0]
+            for s, m in [(self.slider_x, vol_w), (self.slider_y, vol_h), (self.slider_z, vol_d)]:
+                s.setRange(0, m - 1)
+                s.setEnabled(True)
+
+            self.slider_x.setValue(self.core.slice_indices[0])
+            self.slider_y.setValue(self.core.slice_indices[1])
+            self.slider_z.setValue(self.core.slice_indices[2])
 
     def on_density_changed(self, val):
         self.core.slice_density = val / 10.0
@@ -1532,6 +1651,47 @@ class MainWindow(QMainWindow):
     def on_tf_points_changed(self, points):
         self.core.update_alpha_points(points)
         self.update_views()
+
+    def on_primary_channel_changed(self, index):
+        """User selected a different primary energy channel."""
+        if self.core.set_primary_channel(index):
+            self.update_views()
+            # Update slice slider max if depth changed (shouldn't happen, but safe)
+            self.update_slice_ranges()
+
+    def on_overlay_channel_changed(self, index):
+        """User selected a different overlay energy channel for comparison."""
+        if index == 0:  # "None (Off)"
+            self.core.disable_overlay_channel()
+        else:
+            channel_idx = index - 1  # Account for "None" option
+            if self.core.set_overlay_channel(channel_idx):
+                pass
+
+        self.update_views()
+
+    def populate_channel_selectors(self):
+        """Populate channel combo boxes when multi-channel data is loaded."""
+        self.combo_primary_channel.clear()
+        self.combo_overlay_channel.clear()
+        self.combo_overlay_channel.addItem("None (Off)")
+
+        for i in range(self.core.num_channels):
+            # Use channel names if available, otherwise "Channel N"
+            if self.core.channel_names and i < len(self.core.channel_names):
+                name = self.core.channel_names[i]
+            else:
+                name = f"Channel {i}"
+
+            self.combo_primary_channel.addItem(name)
+            self.combo_overlay_channel.addItem(name)
+
+        # Set defaults
+        self.combo_primary_channel.setCurrentIndex(self.core.primary_channel_index)
+        if self.core.has_overlay and self.core.is_multichannel:
+            self.combo_overlay_channel.setCurrentIndex(self.core.overlay_channel_index + 1)
+        else:
+            self.combo_overlay_channel.setCurrentIndex(0)  # None
 
     def on_request_record_movie(self):
         """Records a 360-degree rotation movie of the 3D rendering."""

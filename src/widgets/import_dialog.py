@@ -228,6 +228,12 @@ class ImportDialog(QDialog):
         self.chk_8bit = QCheckBox("Import as 8-bit (halves memory usage)")
         self.chk_8bit.toggled.connect(self.on_reduction_changed)
         reduction_layout.addWidget(self.chk_8bit, 4, 0, 1, 3)
+
+        # Multi-channel import (for spectral CT)
+        self.chk_load_all_channels = QCheckBox("Load all channels for dynamic switching (Spectral CT)")
+        self.chk_load_all_channels.setVisible(False)  # Only show for multi-channel HDF5
+        self.chk_load_all_channels.toggled.connect(self.on_reduction_changed)
+        reduction_layout.addWidget(self.chk_load_all_channels, 5, 0, 1, 3)
         
         config_vbox.addWidget(reduction_group)
         
@@ -301,12 +307,14 @@ class ImportDialog(QDialog):
             if self.is_hdf5 and self.stats.get('num_channels', 1) > 1:
                 self.label_channel.show()
                 self.combo_channel.show()
+                self.chk_load_all_channels.show()  # Show multi-channel loading option
                 if self.combo_channel.count() == 0:
                     for i in range(self.stats['num_channels']):
                         self.combo_channel.addItem(f"Channel {i}")
             else:
                 self.label_channel.hide()
                 self.combo_channel.hide()
+                self.chk_load_all_channels.hide()
             
             # Setup reduction controls
             self.spin_z_start.setRange(0, self.stats['depth'] - 1)
@@ -362,24 +370,45 @@ class ImportDialog(QDialog):
         orig_w = self.stats['width']
         orig_h = self.stats['height']
         orig_d = self.stats['depth']
-        
+
         cur_d = max(0, z1 - z0)
         cur_w = orig_w // self.binning_factor
         cur_h = orig_h // self.binning_factor
         cur_d = cur_d // self.binning_factor
-        
+
+        # Check if loading all channels
+        num_channels = self.stats.get('num_channels', 1)
+        load_all = self.chk_load_all_channels.isChecked() and num_channels > 1
+
         # Estimate memory
-        is_safe, estimated, available = self.core.volume_loader.check_memory_available(
-            cur_w, cur_h, cur_d, self.use_8bit
-        )
+        if load_all:
+            # Calculate for all channels
+            estimated = self.core.volume_loader.estimate_memory_usage_multichannel(
+                cur_w, cur_h, cur_d, num_channels, self.use_8bit
+            )
+            available = psutil.virtual_memory().available
+            is_safe = estimated < (available * 0.8)
+        else:
+            # Single channel
+            is_safe, estimated, available = self.core.volume_loader.check_memory_available(
+                cur_w, cur_h, cur_d, self.use_8bit
+            )
         
         # Update labels
-        info_text = (
-            f"Original: {orig_w}x{orig_h}x{orig_d} ({orig_w*orig_h*orig_d/1e9:.1f}B voxels)\n"
-            f"Reduced:  {cur_w}x{cur_h}x{cur_d} ({cur_w*cur_h*cur_d/1e6:.1f}M voxels)\n"
-            f"Estimated Load: {estimated/1e9:.2f} GB\n"
-            f"Free System RAM: {available/1e9:.2f} GB"
-        )
+        if load_all:
+            info_text = (
+                f"Original: {orig_w}x{orig_h}x{orig_d}x{num_channels} ({orig_w*orig_h*orig_d/1e9:.1f}B voxels × {num_channels} ch)\n"
+                f"Reduced:  {cur_w}x{cur_h}x{cur_d}x{num_channels} ({cur_w*cur_h*cur_d/1e6:.1f}M voxels × {num_channels} ch)\n"
+                f"Estimated Load (all {num_channels} channels): {estimated/1e9:.2f} GB\n"
+                f"Free System RAM: {available/1e9:.2f} GB"
+            )
+        else:
+            info_text = (
+                f"Original: {orig_w}x{orig_h}x{orig_d} ({orig_w*orig_h*orig_d/1e9:.1f}B voxels)\n"
+                f"Reduced:  {cur_w}x{cur_h}x{cur_d} ({cur_w*cur_h*cur_d/1e6:.1f}M voxels)\n"
+                f"Estimated Load: {estimated/1e9:.2f} GB\n"
+                f"Free System RAM: {available/1e9:.2f} GB"
+            )
         self.mem_info_label.setText(info_text)
         
         # Check Hardware Limits
@@ -468,3 +497,8 @@ class ImportDialog(QDialog):
             QCheckBox::indicator { width: 18px; height: 18px; border: 1px solid #555; border-radius: 3px; background-color: #2C3E50; }
             QCheckBox::indicator:checked { background-color: #3498DB; border-color: #3498DB; }
         """)
+
+    @property
+    def load_all_channels(self):
+        """Returns True if user wants to load all energy channels."""
+        return self.chk_load_all_channels.isChecked() and self.is_hdf5 and self.stats and self.stats.get('num_channels', 1) > 1

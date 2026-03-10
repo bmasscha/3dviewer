@@ -23,6 +23,11 @@ class VolumeLoader:
         # Estimate total impact including CPU array, OpenGL texture, and intermediate copies
         return volume_bytes * 2.5
 
+    def estimate_memory_usage_multichannel(self, width, height, depth, num_channels, use_8bit=False):
+        """Estimate memory usage for multi-channel volume (all channels in RAM)."""
+        single_channel_bytes = self.estimate_memory_usage(width, height, depth, use_8bit)
+        return single_channel_bytes * num_channels
+
     def check_memory_available(self, width, height, depth, use_8bit=False):
         """Check if enough system memory is available."""
         estimated = self.estimate_memory_usage(width, height, depth, use_8bit)
@@ -337,6 +342,139 @@ class VolumeLoader:
                 }
         except Exception as e:
             print(f"Error in get_h5_quick_stats: {e}")
+            return None
+
+    def load_all_channels_from_h5(self, file_path, rescale_range=None, z_range=None, binning_factor=1, use_8bit=False, progress_callback=None, **kwargs):
+        """
+        Load ALL channels from a 4D HDF5 dataset [slices, rows, cols, channels].
+        OPTIMIZED: Reads entire 4D volume once, then splits channels in memory.
+        Returns: list of 3D numpy arrays (one per channel), or None on error
+        """
+        if not os.path.exists(file_path):
+            print(f"Error: File not found {file_path}")
+            return None
+
+        try:
+            with h5py.File(file_path, 'r') as f:
+                if 'reconstruction' not in f:
+                    print(f"Error: 'reconstruction' dataset not found in {file_path}")
+                    return None
+
+                ds = f['reconstruction']
+                shape = ds.shape
+
+                # Validate 4D structure
+                if len(shape) != 4:
+                    print(f"Error: Expected 4D dataset, got shape {shape}")
+                    return None
+
+                self.depth, self.height, self.width, num_channels = shape
+                print(f"Multi-channel H5: {self.width}x{self.height}x{self.depth}, Channels: {num_channels}")
+
+                # Check chunking layout for performance info
+                if ds.chunks:
+                    chunk_d, chunk_h, chunk_w, chunk_c = ds.chunks
+                    if chunk_c >= num_channels:
+                        print(f"Optimal chunking detected: {ds.chunks}")
+                    else:
+                        print(f"⚠️  Chunking layout {ds.chunks} spans multiple channels")
+                        print(f"    Using optimized bulk read to avoid redundant disk I/O")
+
+                # Apply Z-range cropping if requested
+                z_start, z_end = 0, self.depth
+                if z_range is not None:
+                    z_start, z_end = z_range
+                    z_start = max(0, z_start)
+                    z_end = min(self.depth, z_end)
+
+                cur_depth = z_end - z_start
+
+                # Check memory for ALL channels
+                is_safe, estimated, available = self.check_memory_available(self.width, self.height, cur_depth, use_8bit)
+                total_estimated = estimated * num_channels
+                print(f"Memory Check (all {num_channels} channels): Estimated {total_estimated/1e9:.2f} GB, Available {available/1e9:.2f} GB")
+
+                if total_estimated > (available * 0.8):
+                    print(f"WARNING: Loading all {num_channels} channels may exceed available memory!")
+
+                # OPTIMIZED: Load entire 4D volume at once (single disk read)
+                if progress_callback:
+                    progress_callback(f"Reading entire 4D volume from disk...")
+
+                print(f"Reading 4D volume [{z_start}:{z_end}, :, :, :] from HDF5...")
+                import time
+                start_time = time.time()
+
+                # Single bulk read - much faster than channel-by-channel!
+                raw_4d = ds[z_start:z_end, :, :, :]
+
+                read_time = time.time() - start_time
+                print(f"Disk read completed in {read_time:.2f}s ({raw_4d.nbytes/1e9:.2f} GB @ {raw_4d.nbytes/read_time/1e6:.1f} MB/s)")
+
+                # Now split and process channels in memory (very fast)
+                channel_list = []
+                target_dtype = np.uint8 if use_8bit else np.uint16
+
+                for ch_idx in range(num_channels):
+                    if progress_callback:
+                        progress_callback(f"Processing channel {ch_idx+1}/{num_channels} in memory...")
+
+                    # Extract channel data from loaded 4D array (in-memory, fast!)
+                    raw_data = raw_4d[:, :, :, ch_idx]
+
+                    # Rescale if requested
+                    if rescale_range is not None:
+                        lower, upper = rescale_range
+                        target_max = 255 if use_8bit else 65535
+                        data_f = raw_data.astype(np.float32)
+                        data_f = (data_f - lower) * float(target_max) / (upper - lower)
+                        data_f = np.clip(data_f, 0, target_max)
+                        channel_data = data_f.astype(target_dtype)
+                    else:
+                        if use_8bit:
+                            if raw_data.dtype == np.uint16:
+                                channel_data = (raw_data >> 8).astype(np.uint8)
+                            else:
+                                channel_data = raw_data.astype(np.uint8)
+                        else:
+                            channel_data = raw_data.astype(np.uint16)
+
+                    # Apply spatial binning if requested
+                    if binning_factor > 1:
+                        if progress_callback and ch_idx == 0:
+                            progress_callback(f"Applying {binning_factor}x binning to all channels...")
+                        scale = 1.0 / binning_factor
+                        channel_data = zoom(channel_data, scale, order=1)
+
+                    # Ensure proper byte order and memory layout
+                    if channel_data.dtype.byteorder == '>' or (channel_data.dtype.byteorder == '=' and sys.byteorder == 'big'):
+                        channel_data = channel_data.byteswap().newbyteorder('<')
+
+                    if not channel_data.flags['C_CONTIGUOUS']:
+                        channel_data = np.ascontiguousarray(channel_data)
+
+                    channel_list.append(channel_data)
+
+                    if ch_idx == 0:
+                        # Store first channel dimensions (after binning)
+                        self.depth, self.height, self.width = channel_data.shape
+
+                # Calculate stats for first channel
+                min_val = np.min(channel_list[0])
+                max_val = np.max(channel_list[0])
+                print(f"Loaded {num_channels} channels successfully. Shape per channel: {channel_list[0].shape}, Dtype: {channel_list[0].dtype}")
+                print(f"Channel 0 Range: [{min_val}, {max_val}]")
+                print(f"Total Memory: {sum(ch.nbytes for ch in channel_list) / (1024*1024):.2f} MB")
+
+                # Store first channel as self.data for compatibility
+                self.data = channel_list[0]
+
+                return channel_list
+
+        except Exception as e:
+            print(f"Error loading multi-channel HDF5 {file_path}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def get_texture_data(self):

@@ -41,6 +41,14 @@ class AppCore:
         self.overlay_offset = glm.vec3(0.0, 0.0, 0.0)
         self.overlay_scale = 1.0
 
+        # Multi-channel support for spectral CT
+        self.is_multichannel = False  # True if loaded data has multiple channels
+        self.num_channels = 0         # Number of available energy channels
+        self.channel_data = []        # List of 3D numpy arrays (one per channel)
+        self.primary_channel_index = 0    # Currently displayed in slot 0
+        self.overlay_channel_index = 1    # Currently displayed in slot 1 (if overlay enabled)
+        self.channel_names = []       # Optional: ["Channel 0", "Channel 1", ...] for labeling
+
         self.light_intensity = 1.0
         self.ambient_light = 0.15
         self.diffuse_light = 0.8
@@ -147,12 +155,34 @@ class AppCore:
             print(f"AppCore Error: Path not found: '{folder_path}'")
         return False
 
-    def finalize_volume_load(self, data, path, is_overlay=False):
+    def finalize_volume_load(self, data, path, is_overlay=False, is_multichannel=False, channel_list=None):
         """
         Performs post-loading initialization: GPU upload, state update, camera reset.
+
+        Args:
+            data: Primary volume data (3D numpy array)
+            path: Dataset file/folder path
+            is_overlay: If True, load into slot 1 as overlay
+            is_multichannel: If True, this is a multi-channel dataset
+            channel_list: List of 3D numpy arrays (one per channel) for multi-channel data
         """
         if data is None:
             return False
+
+        # Handle multi-channel loading
+        if is_multichannel and channel_list is not None and not is_overlay:
+            self.is_multichannel = True
+            self.num_channels = len(channel_list)
+            self.channel_data = channel_list
+            self.primary_channel_index = 0
+
+            # Generate default channel names
+            self.channel_names = [f"Channel {i}" for i in range(self.num_channels)]
+
+            print(f"Multi-channel mode enabled: {self.num_channels} channels loaded")
+
+            # Use first channel as the primary data
+            data = channel_list[0]
 
         d, h, w = data.shape
         slot = 1 if is_overlay else 0
@@ -186,8 +216,57 @@ class AppCore:
             w2, h2, d2 = self.volume_renderer.volume_dims[1]
             w1, h1, d1 = self.volume_renderer.volume_dims[0]
             print(f"Overlay loaded: {w2}x{h2}x{d2} vs Primary: {w1}x{h1}x{d1}")
-        
+
         return True
+
+    def set_primary_channel(self, channel_index):
+        """Switch which energy channel is displayed in primary slot (slot 0)."""
+        if not self.is_multichannel or channel_index >= self.num_channels or channel_index < 0:
+            return False
+
+        self.primary_channel_index = channel_index
+        data = self.channel_data[channel_index]
+
+        # Re-upload texture to GPU slot 0
+        d, h, w = data.shape
+        self.volume_renderer.create_texture(data, w, h, d, slot=0)
+
+        # Update current_volume_data for filters
+        self.current_volume_data = data
+
+        print(f"Switched primary channel to {channel_index}")
+        return True
+
+    def set_overlay_channel(self, channel_index):
+        """Switch which energy channel is displayed in overlay slot (slot 1)."""
+        if not self.is_multichannel or channel_index >= self.num_channels or channel_index < 0:
+            return False
+
+        self.overlay_channel_index = channel_index
+        data = self.channel_data[channel_index]
+
+        # Re-upload texture to GPU slot 1
+        d, h, w = data.shape
+        self.volume_renderer.create_texture(data, w, h, d, slot=1)
+
+        # Enable overlay if not already
+        if not self.has_overlay:
+            self.has_overlay = True
+            self.overlay_volume_data = data
+            self.update_tf_texture(slot=1)
+
+        print(f"Switched overlay channel to {channel_index}")
+        return True
+
+    def disable_overlay_channel(self):
+        """Turn off the overlay channel comparison."""
+        if self.is_multichannel:
+            # In multi-channel mode, just disable overlay rendering
+            self.has_overlay = False
+            print("Overlay channel disabled")
+        else:
+            # Normal overlay disable
+            self.has_overlay = False
 
     def apply_filter(self, filter_name, progress_callback=None, check_cancel=None, **params):
         """
