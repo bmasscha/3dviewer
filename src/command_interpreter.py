@@ -155,7 +155,11 @@ class CommandInterpreter:
     def _load_commands_file(self):
         """Load commands documentation from commands.md file."""
         try:
-            commands_path = os.path.join(os.path.dirname(__file__), 'commands.md')
+            commands_path = os.path.join(os.path.dirname(__file__), 'documentation_3dviewer', 'commands.md')
+            if not os.path.exists(commands_path):
+                # Try relative to project root as secondary fallback
+                commands_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'src', 'documentation_3dviewer', 'commands.md')
+                
             with open(commands_path, 'r', encoding='utf-8') as f:
                 return f.read()
         except Exception as e:
