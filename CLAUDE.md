@@ -63,6 +63,13 @@ uv run src/3dviewer_gui.py
 uv pip install -r requirements.txt
 ```
 
+**Windows + Anaconda note:** If Anaconda is installed, `uv` may pick up Anaconda's Python by default, causing a PyQt6 DLL conflict (`ImportError: DLL load failed while importing QtCore`). The fix is to pin uv's own managed Python in `.python-version` (already set to `3.11.14`). To recreate the venv from scratch:
+
+```powershell
+Remove-Item -Recurse -Force .venv
+uv run src/3dviewer_gui.py
+```
+
 Using standard `pip`:
 
 ```bash
