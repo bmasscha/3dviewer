@@ -1,23 +1,21 @@
-import urllib.request
 import json
+import urllib.request
 
 # Test the exact setup
 url = "http://127.0.0.1:11434/api/generate"
-payload = {
-    "model": "gemma3:1b",
-    "prompt": "Say hello",
-    "stream": False
-}
+payload = {"model": "gemma3:1b", "prompt": "Say hello", "stream": False}
 
 try:
-    data = json.dumps(payload).encode('utf-8')
-    req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
-    
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=data, headers={"Content-Type": "application/json"}
+    )
+
     proxy_handler = urllib.request.ProxyHandler({})
     opener = urllib.request.build_opener(proxy_handler)
-    
+
     with opener.open(req, timeout=10.0) as response:
-        result = json.loads(response.read().decode('utf-8'))
+        result = json.loads(response.read().decode("utf-8"))
         print("SUCCESS!")
         print(json.dumps(result, indent=2))
 except urllib.error.HTTPError as e:

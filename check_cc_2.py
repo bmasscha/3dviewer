@@ -1,5 +1,5 @@
 import colorcet as cc
-import numpy as np
+
 
 def check(name):
     if hasattr(cc, name):
@@ -10,7 +10,8 @@ def check(name):
     else:
         print(f"{name}: NOT FOUND", flush=True)
 
-check('glasbey')
-check('glasbey_dark')
-check('linear_kry_5_95_c72')
-check('fire')
+
+check("glasbey")
+check("glasbey_dark")
+check("linear_kry_5_95_c72")
+check("fire")

@@ -1,5 +1,6 @@
-import glfw
 import sys
+
+import glfw
 
 with open("test_glfw.log", "w") as f:
     f.write("Start\n")
@@ -7,7 +8,7 @@ with open("test_glfw.log", "w") as f:
         f.write("Init failed\n")
         sys.exit(1)
     f.write("Init ok\n")
-    
+
     window = glfw.create_window(100, 100, "Test", None, None)
     if not window:
         f.write("Window failed\n")

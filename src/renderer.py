@@ -1,6 +1,6 @@
-import OpenGL.GL as gl
 import numpy as np
-import ctypes
+import OpenGL.GL as gl
+
 
 class ShaderProgram:
     def __init__(self, vertex_source, fragment_source):
@@ -10,7 +10,7 @@ class ShaderProgram:
         shader = gl.glCreateShader(shader_type)
         gl.glShaderSource(shader, source)
         gl.glCompileShader(shader)
-        
+
         if not gl.glGetShaderiv(shader, gl.GL_COMPILE_STATUS):
             error = gl.glGetShaderInfoLog(shader).decode()
             print(f"Shader compilation error ({shader_type}):\n{error}")
@@ -41,11 +41,11 @@ class ShaderProgram:
     def set_int(self, name, value):
         loc = gl.glGetUniformLocation(self.program, name)
         gl.glUniform1i(loc, value)
-    
+
     def set_float(self, name, value):
         loc = gl.glGetUniformLocation(self.program, name)
         gl.glUniform1f(loc, value)
-    
+
     def set_vec3(self, name, x, y, z):
         loc = gl.glGetUniformLocation(self.program, name)
         gl.glUniform3f(loc, x, y, z)
@@ -53,7 +53,7 @@ class ShaderProgram:
     def set_vec2(self, name, x, y):
         loc = gl.glGetUniformLocation(self.program, name)
         gl.glUniform2f(loc, x, y)
-        
+
     def set_mat4(self, name, value):
         loc = gl.glGetUniformLocation(self.program, name)
         gl.glUniformMatrix4fv(loc, 1, gl.GL_FALSE, value)
@@ -61,10 +61,10 @@ class ShaderProgram:
 
 class VolumeRenderer:
     def __init__(self):
-        self.texture_ids = {} # slot -> id
-        self.tf_texture_ids = {} # slot -> id
-        self.volume_dims = {0: (0, 0, 0), 1: (0, 0, 0)} # slot -> (W, H, D)
-        self.max_texture_size = 2048 # Default fallback
+        self.texture_ids = {}  # slot -> id
+        self.tf_texture_ids = {}  # slot -> id
+        self.volume_dims = {0: (0, 0, 0), 1: (0, 0, 0)}  # slot -> (W, H, D)
+        self.max_texture_size = 2048  # Default fallback
 
     def query_limits(self):
         """Queries OpenGL limits. Must be called after GL context is initialized."""
@@ -110,7 +110,7 @@ class VolumeRenderer:
             0,
             gl.GL_RED,
             pixel_type,
-            data
+            data,
         )
         self.volume_dims[slot] = (width, height, depth)
 
@@ -125,17 +125,17 @@ class VolumeRenderer:
         """
         if slot in self.tf_texture_ids:
             gl.glDeleteTextures(1, [self.tf_texture_ids[slot]])
-        
+
         tex_id = gl.glGenTextures(1)
         self.tf_texture_ids[slot] = tex_id
         gl.glBindTexture(gl.GL_TEXTURE_1D, tex_id)
-        
+
         gl.glTexParameteri(gl.GL_TEXTURE_1D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
-        
+
         filter_mode = gl.GL_NEAREST if categorical else gl.GL_LINEAR
         gl.glTexParameteri(gl.GL_TEXTURE_1D, gl.GL_TEXTURE_MAG_FILTER, filter_mode)
         gl.glTexParameteri(gl.GL_TEXTURE_1D, gl.GL_TEXTURE_MIN_FILTER, filter_mode)
-        
+
         try:
             gl.glTexImage1D(
                 gl.GL_TEXTURE_1D,
@@ -145,7 +145,7 @@ class VolumeRenderer:
                 0,
                 gl.GL_RGBA,
                 gl.GL_FLOAT,
-                data
+                data,
             )
         except Exception as e:
             print(f"Error in create_tf_texture (slot {slot}): {e}")

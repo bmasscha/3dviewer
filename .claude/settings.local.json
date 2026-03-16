@@ -4,7 +4,12 @@
       "Bash(git checkout:*)",
       "Bash(.venv/Scripts/python.exe:*)",
       "Bash(.venv/Scripts/uv sync:*)",
-      "Bash(uv sync:*)"
+      "Bash(uv sync:*)",
+      "Bash(printf '3.11\\\\n')",
+      "Bash(\"c:/code/antigravity/3dviewer/.python-version\")",
+      "Bash(uv run:*)",
+      "Bash(uv python:*)",
+      "Bash(printf '3.11.14\\\\n')"
     ]
   }
 }

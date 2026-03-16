@@ -1,15 +1,16 @@
-import h5py
-import numpy as np
 import os
 
-test_file = 'test_dup.h5'
+import h5py
+import numpy as np
+
+test_file = "test_dup.h5"
 data = np.random.randint(0, 100, (1, 10, 10), dtype=np.uint16)
-with h5py.File(test_file, 'w') as f:
-    f.create_dataset('data', data=data)
+with h5py.File(test_file, "w") as f:
+    f.create_dataset("data", data=data)
 
 try:
-    with h5py.File(test_file, 'r') as f:
-        ds = f['data']
+    with h5py.File(test_file, "r") as f:
+        ds = f["data"]
         indices = [0, 0, 0]
         print(f"Indexing with {indices}...")
         res = ds[indices, :, :]

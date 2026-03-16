@@ -1,12 +1,14 @@
+import configparser
+import glob
 import os
 import sys
-import glob
-import configparser
-import numpy as np
-import tifffile
+
 import h5py
+import numpy as np
 import psutil
+import tifffile
 from scipy.ndimage import zoom
+
 
 class VolumeLoader:
     def __init__(self):
@@ -23,9 +25,13 @@ class VolumeLoader:
         # Estimate total impact including CPU array, OpenGL texture, and intermediate copies
         return volume_bytes * 2.5
 
-    def estimate_memory_usage_multichannel(self, width, height, depth, num_channels, use_8bit=False):
+    def estimate_memory_usage_multichannel(
+        self, width, height, depth, num_channels, use_8bit=False
+    ):
         """Estimate memory usage for multi-channel volume (all channels in RAM)."""
-        single_channel_bytes = self.estimate_memory_usage(width, height, depth, use_8bit)
+        single_channel_bytes = self.estimate_memory_usage(
+            width, height, depth, use_8bit
+        )
         return single_channel_bytes * num_channels
 
     def check_memory_available(self, width, height, depth, use_8bit=False):
@@ -35,10 +41,19 @@ class VolumeLoader:
         # Allow use up to 80% of available RAM
         return estimated < (available * 0.8), estimated, available
 
-    def load_from_folder(self, folder_path, rescale_range=None, z_range=None, binning_factor=1, use_8bit=False, progress_callback=None, **kwargs):
+    def load_from_folder(
+        self,
+        folder_path,
+        rescale_range=None,
+        z_range=None,
+        binning_factor=1,
+        use_8bit=False,
+        progress_callback=None,
+        **kwargs,
+    ):
         """
         Loads .tif/.tiff files from the specified folder with optional reduction.
-        
+
         rescale_range: tuple (min, max) to rescale from to (0, 65535) or (0, 255).
         z_range: tuple (start, end) of slice indices to load.
         binning_factor: factor for spatial downsampling (e.g. 2 for 2x2x2).
@@ -46,14 +61,14 @@ class VolumeLoader:
         progress_callback: optional function(message) to call for progress updates.
         """
         # Find all tiff files
-        extensions = ['*.tif', '*.tiff', '*.TIF', '*.TIFF']
-        files = set() # Use set to avoid duplicates on case-insensitive filesystems
+        extensions = ["*.tif", "*.tiff", "*.TIF", "*.TIFF"]
+        files = set()  # Use set to avoid duplicates on case-insensitive filesystems
         for ext in extensions:
             files.update(glob.glob(os.path.join(folder_path, ext)))
-        
+
         # Convert back to list and sort
         files = sorted(list(files))
-        
+
         if not files:
             print(f"Error: No TIFF files found in {folder_path}")
             return None
@@ -77,16 +92,22 @@ class VolumeLoader:
             z_end = min(self.depth, z_end)
             files = files[z_start:z_end]
             self.depth = len(files)
-            print(f"Applied Z-range crop: {z_start} to {z_end}. Remaining depth: {self.depth}")
+            print(
+                f"Applied Z-range crop: {z_start} to {z_end}. Remaining depth: {self.depth}"
+            )
 
         print(f"Volume Dimensions: {self.width}x{self.height}x{self.depth}")
 
         # Check memory
-        is_safe, estimated, available = self.check_memory_available(self.width, self.height, self.depth, use_8bit)
-        print(f"Memory Check: Estimated {estimated/1e9:.2f} GB, Available {available/1e9:.2f} GB")
+        is_safe, estimated, available = self.check_memory_available(
+            self.width, self.height, self.depth, use_8bit
+        )
+        print(
+            f"Memory Check: Estimated {estimated / 1e9:.2f} GB, Available {available / 1e9:.2f} GB"
+        )
         if not is_safe:
-            print(f"CRITICAL: Insufficient memory to load dataset!")
-            # We skip hard error here for now to allow expert users to try, 
+            print("CRITICAL: Insufficient memory to load dataset!")
+            # We skip hard error here for now to allow expert users to try,
             # but in UI we will block it.
 
         # Pre-allocate memory
@@ -99,20 +120,24 @@ class VolumeLoader:
         else:
             # No rescaling, load directly to target dtype
             target_dtype = np.uint8 if use_8bit else np.uint16
-            self.data = np.zeros((self.depth, self.height, self.width), dtype=target_dtype)
+            self.data = np.zeros(
+                (self.depth, self.height, self.width), dtype=target_dtype
+            )
 
         # Load slices
         for i, f in enumerate(files):
             # Report progress every 10 slices
             if progress_callback and i % 10 == 0:
-                progress_callback(f"Loading slice {i+1}/{self.depth}...")
-            
+                progress_callback(f"Loading slice {i + 1}/{self.depth}...")
+
             try:
                 img = tifffile.imread(f)
                 if img.shape != (self.height, self.width):
-                    print(f"Warning: Slice {i} has different dimensions {img.shape}, skipping.")
+                    print(
+                        f"Warning: Slice {i} has different dimensions {img.shape}, skipping."
+                    )
                     continue
-                
+
                 if rescale_range is not None:
                     # Keep original dtype for rescaling
                     self.data.append(img)
@@ -127,18 +152,18 @@ class VolumeLoader:
                         self.data[i] = img
             except Exception as e:
                 print(f"Error reading slice {i} ({f}): {e}")
-        
+
         # Convert list to array if we were collecting for rescaling
         if rescale_range is not None:
             self.data = np.array(self.data)
-        
+
         # Rescale if requested
         if rescale_range is not None:
             lower, upper = rescale_range
             target_dtype = np.uint8 if use_8bit else np.uint16
             target_max = 255 if use_8bit else 65535
             print(f"Rescaling data from [{lower}, {upper}] to [0, {target_max}]...")
-            
+
             data_f = self.data.astype(np.float32)
             data_f = (data_f - lower) * float(target_max) / (upper - lower)
             data_f = np.clip(data_f, 0, target_max)
@@ -147,50 +172,70 @@ class VolumeLoader:
         # Apply spatial binning if requested
         if binning_factor > 1:
             if progress_callback:
-                progress_callback(f"Applying {binning_factor}x{binning_factor}x{binning_factor} binning...")
+                progress_callback(
+                    f"Applying {binning_factor}x{binning_factor}x{binning_factor} binning..."
+                )
             print(f"Applying spatial binning (factor {binning_factor})...")
             # zoom expects (z, y, x)
             scale = 1.0 / binning_factor
-            self.data = zoom(self.data, scale, order=1) # Linear interpolation
+            self.data = zoom(self.data, scale, order=1)  # Linear interpolation
             self.depth, self.height, self.width = self.data.shape
-            print(f"New Dimensions after binning: {self.width}x{self.height}x{self.depth}")
-        
+            print(
+                f"New Dimensions after binning: {self.width}x{self.height}x{self.depth}"
+            )
+
         # Calculate stats
         min_val = np.min(self.data)
         max_val = np.max(self.data)
         mean_val = np.mean(self.data)
-        
-        print(f"Volume loaded successfully. Shape: {self.data.shape}, Dtype: {self.data.dtype}")
+
+        print(
+            f"Volume loaded successfully. Shape: {self.data.shape}, Dtype: {self.data.dtype}"
+        )
         print(f"Data Range: [{min_val}, {max_val}], Mean: {mean_val:.2f}")
-        
+
         # Ensure data is little-endian (native x86) for OpenGL
         # if the data is big-endian (>u2), swap bytes
-        if self.data.dtype.byteorder == '>' or (self.data.dtype.byteorder == '=' and sys.byteorder == 'big'):
+        if self.data.dtype.byteorder == ">" or (
+            self.data.dtype.byteorder == "=" and sys.byteorder == "big"
+        ):
             print("Converting Big-Endian data to Little-Endian for OpenGL...")
-            self.data = self.data.byteswap().newbyteorder('<')
-        
-        # Also ensure it is contiguous in memory
-        if not self.data.flags['C_CONTIGUOUS']:
-             print("Making data C-contiguous...")
-             self.data = np.ascontiguousarray(self.data)
+            self.data = self.data.byteswap().newbyteorder("<")
 
-        print(f"Memory usage: {self.data.nbytes / (1024*1024):.2f} MB")
+        # Also ensure it is contiguous in memory
+        if not self.data.flags["C_CONTIGUOUS"]:
+            print("Making data C-contiguous...")
+            self.data = np.ascontiguousarray(self.data)
+
+        print(f"Memory usage: {self.data.nbytes / (1024 * 1024):.2f} MB")
 
         # Try to parse XRE settings file for geometry info
         self.parse_xre_settings(folder_path)
 
         # Adjust voxel size if binning was applied
-        if self.geometry and self.geometry.get('voxel_size') and binning_factor > 1:
-            original_voxel = self.geometry['voxel_size']
-            self.geometry['voxel_size'] = original_voxel * binning_factor
-            self.geometry['original_voxel_size'] = original_voxel
-            print(f"Adjusted voxel size for {binning_factor}x binning: {original_voxel} -> {self.geometry['voxel_size']} mm")
+        if self.geometry and self.geometry.get("voxel_size") and binning_factor > 1:
+            original_voxel = self.geometry["voxel_size"]
+            self.geometry["voxel_size"] = original_voxel * binning_factor
+            self.geometry["original_voxel_size"] = original_voxel
+            print(
+                f"Adjusted voxel size for {binning_factor}x binning: {original_voxel} -> {self.geometry['voxel_size']} mm"
+            )
 
         return self.data
 
-    def load_from_h5(self, file_path, channel_index=0, rescale_range=None, z_range=None, binning_factor=1, use_8bit=False, progress_callback=None, **kwargs):
+    def load_from_h5(
+        self,
+        file_path,
+        channel_index=0,
+        rescale_range=None,
+        z_range=None,
+        binning_factor=1,
+        use_8bit=False,
+        progress_callback=None,
+        **kwargs,
+    ):
         """
-        Loads volumetric data from an HDF5 file. 
+        Loads volumetric data from an HDF5 file.
         Expects a 'reconstruction' dataset with shape (slices, rows, cols, channels) or (slices, rows, cols).
         """
         if not os.path.exists(file_path):
@@ -198,19 +243,21 @@ class VolumeLoader:
             return None
 
         try:
-            with h5py.File(file_path, 'r') as f:
-                if 'reconstruction' not in f:
+            with h5py.File(file_path, "r") as f:
+                if "reconstruction" not in f:
                     print(f"Error: 'reconstruction' dataset not found in {file_path}")
                     return None
-                
-                ds = f['reconstruction']
+
+                ds = f["reconstruction"]
                 shape = ds.shape
-                
+
                 # Handle 4D (slices, rows, cols, channels)
                 if len(shape) == 4:
                     self.depth, self.height, self.width, num_channels = shape
                     if channel_index >= num_channels:
-                        print(f"Warning: Channel index {channel_index} out of range ({num_channels}), using 0.")
+                        print(
+                            f"Warning: Channel index {channel_index} out of range ({num_channels}), using 0."
+                        )
                         channel_index = 0
                 elif len(shape) == 3:
                     self.depth, self.height, self.width = shape
@@ -219,7 +266,9 @@ class VolumeLoader:
                     print(f"Error: Unexpected dataset shape {shape}")
                     return None
 
-                print(f"H5 Volume Dimensions: {self.width}x{self.height}x{self.depth}, Channels: {num_channels}")
+                print(
+                    f"H5 Volume Dimensions: {self.width}x{self.height}x{self.depth}, Channels: {num_channels}"
+                )
 
                 # Apply Z-range cropping if requested
                 z_start, z_end = 0, self.depth
@@ -227,17 +276,23 @@ class VolumeLoader:
                     z_start, z_end = z_range
                     z_start = max(0, z_start)
                     z_end = min(self.depth, z_end)
-                
+
                 cur_depth = z_end - z_start
-                
+
                 # Check memory
-                is_safe, estimated, available = self.check_memory_available(self.width, self.height, cur_depth, use_8bit)
-                print(f"Memory Check: Estimated {estimated/1e9:.2f} GB, Available {available/1e9:.2f} GB")
+                is_safe, estimated, available = self.check_memory_available(
+                    self.width, self.height, cur_depth, use_8bit
+                )
+                print(
+                    f"Memory Check: Estimated {estimated / 1e9:.2f} GB, Available {available / 1e9:.2f} GB"
+                )
                 # We continue anyway, as in load_from_folder
 
                 # Load data
                 if progress_callback:
-                    progress_callback(f"Reading HDF5 dataset (channel {channel_index})...")
+                    progress_callback(
+                        f"Reading HDF5 dataset (channel {channel_index})..."
+                    )
 
                 if len(shape) == 4:
                     raw_data = ds[z_start:z_end, :, :, channel_index]
@@ -251,8 +306,10 @@ class VolumeLoader:
                     lower, upper = rescale_range
                     target_dtype = np.uint8 if use_8bit else np.uint16
                     target_max = 255 if use_8bit else 65535
-                    print(f"Rescaling data from [{lower}, {upper}] to [0, {target_max}]...")
-                    
+                    print(
+                        f"Rescaling data from [{lower}, {upper}] to [0, {target_max}]..."
+                    )
+
                     data_f = raw_data.astype(np.float32)
                     data_f = (data_f - lower) * float(target_max) / (upper - lower)
                     data_f = np.clip(data_f, 0, target_max)
@@ -270,7 +327,9 @@ class VolumeLoader:
                 # Apply spatial binning if requested
                 if binning_factor > 1:
                     if progress_callback:
-                        progress_callback(f"Applying {binning_factor}x{binning_factor}x{binning_factor} binning...")
+                        progress_callback(
+                            f"Applying {binning_factor}x{binning_factor}x{binning_factor} binning..."
+                        )
                     scale = 1.0 / binning_factor
                     self.data = zoom(self.data, scale, order=1)
                     self.depth, self.height, self.width = self.data.shape
@@ -278,13 +337,17 @@ class VolumeLoader:
                 # Stats and preparation
                 min_val = np.min(self.data)
                 max_val = np.max(self.data)
-                print(f"Volume loaded successfully. Shape: {self.data.shape}, Dtype: {self.data.dtype}")
+                print(
+                    f"Volume loaded successfully. Shape: {self.data.shape}, Dtype: {self.data.dtype}"
+                )
                 print(f"Data Range: [{min_val}, {max_val}]")
 
-                if self.data.dtype.byteorder == '>' or (self.data.dtype.byteorder == '=' and sys.byteorder == 'big'):
-                    self.data = self.data.byteswap().newbyteorder('<')
-                
-                if not self.data.flags['C_CONTIGUOUS']:
+                if self.data.dtype.byteorder == ">" or (
+                    self.data.dtype.byteorder == "=" and sys.byteorder == "big"
+                ):
+                    self.data = self.data.byteswap().newbyteorder("<")
+
+                if not self.data.flags["C_CONTIGUOUS"]:
                     self.data = np.ascontiguousarray(self.data)
 
                 return self.data
@@ -292,6 +355,7 @@ class VolumeLoader:
         except Exception as e:
             print(f"Error loading HDF5 {file_path}: {e}")
             import traceback
+
             traceback.print_exc()
             return None
 
@@ -303,13 +367,13 @@ class VolumeLoader:
             return None
 
         try:
-            with h5py.File(file_path, 'r') as f:
-                if 'reconstruction' not in f:
+            with h5py.File(file_path, "r") as f:
+                if "reconstruction" not in f:
                     return None
-                
-                ds = f['reconstruction']
+
+                ds = f["reconstruction"]
                 shape = ds.shape
-                
+
                 num_channels = 1
                 if len(shape) == 4:
                     d, h, w, num_channels = shape
@@ -328,23 +392,32 @@ class VolumeLoader:
                     samples = ds[indices, :, :]
 
                 hist, bin_edges = np.histogram(samples, bins=256, range=(0, 65535))
-                
+
                 return {
-                    'width': w,
-                    'height': h,
-                    'depth': d,
-                    'num_channels': num_channels,
-                    'middle_slice': mid_slice,
-                    'histogram': hist,
-                    'bin_edges': bin_edges,
-                    'min': np.min(samples),
-                    'max': np.max(samples)
+                    "width": w,
+                    "height": h,
+                    "depth": d,
+                    "num_channels": num_channels,
+                    "middle_slice": mid_slice,
+                    "histogram": hist,
+                    "bin_edges": bin_edges,
+                    "min": np.min(samples),
+                    "max": np.max(samples),
                 }
         except Exception as e:
             print(f"Error in get_h5_quick_stats: {e}")
             return None
 
-    def load_all_channels_from_h5(self, file_path, rescale_range=None, z_range=None, binning_factor=1, use_8bit=False, progress_callback=None, **kwargs):
+    def load_all_channels_from_h5(
+        self,
+        file_path,
+        rescale_range=None,
+        z_range=None,
+        binning_factor=1,
+        use_8bit=False,
+        progress_callback=None,
+        **kwargs,
+    ):
         """
         Load ALL channels from a 4D HDF5 dataset [slices, rows, cols, channels].
         OPTIMIZED: Reads entire 4D volume once, then splits channels in memory.
@@ -355,12 +428,12 @@ class VolumeLoader:
             return None
 
         try:
-            with h5py.File(file_path, 'r') as f:
-                if 'reconstruction' not in f:
+            with h5py.File(file_path, "r") as f:
+                if "reconstruction" not in f:
                     print(f"Error: 'reconstruction' dataset not found in {file_path}")
                     return None
 
-                ds = f['reconstruction']
+                ds = f["reconstruction"]
                 shape = ds.shape
 
                 # Validate 4D structure
@@ -369,7 +442,9 @@ class VolumeLoader:
                     return None
 
                 self.depth, self.height, self.width, num_channels = shape
-                print(f"Multi-channel H5: {self.width}x{self.height}x{self.depth}, Channels: {num_channels}")
+                print(
+                    f"Multi-channel H5: {self.width}x{self.height}x{self.depth}, Channels: {num_channels}"
+                )
 
                 # Check chunking layout for performance info
                 if ds.chunks:
@@ -378,7 +453,9 @@ class VolumeLoader:
                         print(f"Optimal chunking detected: {ds.chunks}")
                     else:
                         print(f"⚠️  Chunking layout {ds.chunks} spans multiple channels")
-                        print(f"    Using optimized bulk read to avoid redundant disk I/O")
+                        print(
+                            "    Using optimized bulk read to avoid redundant disk I/O"
+                        )
 
                 # Apply Z-range cropping if requested
                 z_start, z_end = 0, self.depth
@@ -390,26 +467,35 @@ class VolumeLoader:
                 cur_depth = z_end - z_start
 
                 # Check memory for ALL channels
-                is_safe, estimated, available = self.check_memory_available(self.width, self.height, cur_depth, use_8bit)
+                is_safe, estimated, available = self.check_memory_available(
+                    self.width, self.height, cur_depth, use_8bit
+                )
                 total_estimated = estimated * num_channels
-                print(f"Memory Check (all {num_channels} channels): Estimated {total_estimated/1e9:.2f} GB, Available {available/1e9:.2f} GB")
+                print(
+                    f"Memory Check (all {num_channels} channels): Estimated {total_estimated / 1e9:.2f} GB, Available {available / 1e9:.2f} GB"
+                )
 
                 if total_estimated > (available * 0.8):
-                    print(f"WARNING: Loading all {num_channels} channels may exceed available memory!")
+                    print(
+                        f"WARNING: Loading all {num_channels} channels may exceed available memory!"
+                    )
 
                 # OPTIMIZED: Load entire 4D volume at once (single disk read)
                 if progress_callback:
-                    progress_callback(f"Reading entire 4D volume from disk...")
+                    progress_callback("Reading entire 4D volume from disk...")
 
                 print(f"Reading 4D volume [{z_start}:{z_end}, :, :, :] from HDF5...")
                 import time
+
                 start_time = time.time()
 
                 # Single bulk read - much faster than channel-by-channel!
                 raw_4d = ds[z_start:z_end, :, :, :]
 
                 read_time = time.time() - start_time
-                print(f"Disk read completed in {read_time:.2f}s ({raw_4d.nbytes/1e9:.2f} GB @ {raw_4d.nbytes/read_time/1e6:.1f} MB/s)")
+                print(
+                    f"Disk read completed in {read_time:.2f}s ({raw_4d.nbytes / 1e9:.2f} GB @ {raw_4d.nbytes / read_time / 1e6:.1f} MB/s)"
+                )
 
                 # Now split and process channels in memory (very fast)
                 channel_list = []
@@ -417,7 +503,9 @@ class VolumeLoader:
 
                 for ch_idx in range(num_channels):
                     if progress_callback:
-                        progress_callback(f"Processing channel {ch_idx+1}/{num_channels} in memory...")
+                        progress_callback(
+                            f"Processing channel {ch_idx + 1}/{num_channels} in memory..."
+                        )
 
                     # Extract channel data from loaded 4D array (in-memory, fast!)
                     raw_data = raw_4d[:, :, :, ch_idx]
@@ -442,15 +530,19 @@ class VolumeLoader:
                     # Apply spatial binning if requested
                     if binning_factor > 1:
                         if progress_callback and ch_idx == 0:
-                            progress_callback(f"Applying {binning_factor}x binning to all channels...")
+                            progress_callback(
+                                f"Applying {binning_factor}x binning to all channels..."
+                            )
                         scale = 1.0 / binning_factor
                         channel_data = zoom(channel_data, scale, order=1)
 
                     # Ensure proper byte order and memory layout
-                    if channel_data.dtype.byteorder == '>' or (channel_data.dtype.byteorder == '=' and sys.byteorder == 'big'):
-                        channel_data = channel_data.byteswap().newbyteorder('<')
+                    if channel_data.dtype.byteorder == ">" or (
+                        channel_data.dtype.byteorder == "=" and sys.byteorder == "big"
+                    ):
+                        channel_data = channel_data.byteswap().newbyteorder("<")
 
-                    if not channel_data.flags['C_CONTIGUOUS']:
+                    if not channel_data.flags["C_CONTIGUOUS"]:
                         channel_data = np.ascontiguousarray(channel_data)
 
                     channel_list.append(channel_data)
@@ -462,9 +554,13 @@ class VolumeLoader:
                 # Calculate stats for first channel
                 min_val = np.min(channel_list[0])
                 max_val = np.max(channel_list[0])
-                print(f"Loaded {num_channels} channels successfully. Shape per channel: {channel_list[0].shape}, Dtype: {channel_list[0].dtype}")
+                print(
+                    f"Loaded {num_channels} channels successfully. Shape per channel: {channel_list[0].shape}, Dtype: {channel_list[0].dtype}"
+                )
                 print(f"Channel 0 Range: [{min_val}, {max_val}]")
-                print(f"Total Memory: {sum(ch.nbytes for ch in channel_list) / (1024*1024):.2f} MB")
+                print(
+                    f"Total Memory: {sum(ch.nbytes for ch in channel_list) / (1024 * 1024):.2f} MB"
+                )
 
                 # Store first channel as self.data for compatibility
                 self.data = channel_list[0]
@@ -474,6 +570,7 @@ class VolumeLoader:
         except Exception as e:
             print(f"Error loading multi-channel HDF5 {file_path}: {e}")
             import traceback
+
             traceback.print_exc()
             return None
 
@@ -488,40 +585,40 @@ class VolumeLoader:
         Fast scan of the folder to get dimensions, a few sample slices, and a histogram.
         Returns (width, height, depth, middle_slice, histogram, bin_edges)
         """
-        extensions = ['*.tif', '*.tiff', '*.TIF', '*.TIFF']
+        extensions = ["*.tif", "*.tiff", "*.TIF", "*.TIFF"]
         files = set()
         for ext in extensions:
             files.update(glob.glob(os.path.join(folder_path, ext)))
         files = sorted(list(files))
-        
+
         if not files:
             return None
-            
+
         depth = len(files)
         mid_idx = depth // 2
-        
+
         try:
             mid_slice = tifffile.imread(files[mid_idx])
             h, w = mid_slice.shape
-            
+
             # Sample a few more slices for a better histogram
             indices = np.linspace(0, depth - 1, sample_count, dtype=int)
             samples = []
             for idx in indices:
                 samples.append(tifffile.imread(files[idx]))
-            
+
             all_samples = np.array(samples)
             hist, bin_edges = np.histogram(all_samples, bins=256, range=(0, 65535))
-            
+
             return {
-                'width': w,
-                'height': h,
-                'depth': depth,
-                'middle_slice': mid_slice,
-                'histogram': hist,
-                'bin_edges': bin_edges,
-                'min': np.min(all_samples),
-                'max': np.max(all_samples)
+                "width": w,
+                "height": h,
+                "depth": depth,
+                "middle_slice": mid_slice,
+                "histogram": hist,
+                "bin_edges": bin_edges,
+                "min": np.min(all_samples),
+                "max": np.max(all_samples),
             }
         except Exception as e:
             print(f"Error in get_quick_stats: {e}")
@@ -534,7 +631,7 @@ class VolumeLoader:
         """
         # Search patterns - check current folder and parent
         search_paths = [folder_path, os.path.dirname(folder_path)]
-        patterns = ['data settings xre*.txt', 'data settings xre recon*.txt']
+        patterns = ["data settings xre*.txt", "data settings xre recon*.txt"]
 
         settings_file = None
         for search_path in search_paths:
@@ -556,14 +653,14 @@ class VolumeLoader:
             # Parse as INI file
             config = configparser.ConfigParser()
             # Handle the = in values by reading with a custom approach
-            with open(settings_file, 'r', encoding='utf-8', errors='ignore') as f:
+            with open(settings_file, encoding="utf-8", errors="ignore") as f:
                 config.read_file(f)
 
             geometry = {}
 
             # Extract CT-parameters IN section
-            if 'CT-parameters IN' in config:
-                ct_params = config['CT-parameters IN']
+            if "CT-parameters IN" in config:
+                ct_params = config["CT-parameters IN"]
 
                 # Parse key geometry values (stored as quoted strings)
                 def get_float(key, default=None):
@@ -577,35 +674,43 @@ class VolumeLoader:
                             return default
                     return default
 
-                geometry['voxel_size'] = get_float('Voxel size')  # mm
-                geometry['pixel_size'] = get_float('Pixel size')  # mm (detector)
-                geometry['sod'] = get_float('SOD')  # Source-Object Distance (mm)
-                geometry['sdd'] = get_float('SDD')  # Source-Detector Distance (mm)
-                geometry['cor'] = get_float('COR')  # Center of Rotation
+                geometry["voxel_size"] = get_float("Voxel size")  # mm
+                geometry["pixel_size"] = get_float("Pixel size")  # mm (detector)
+                geometry["sod"] = get_float("SOD")  # Source-Object Distance (mm)
+                geometry["sdd"] = get_float("SDD")  # Source-Detector Distance (mm)
+                geometry["cor"] = get_float("COR")  # Center of Rotation
 
                 # Calculate magnification if we have SOD and SDD
-                if geometry['sod'] and geometry['sdd']:
-                    geometry['magnification'] = geometry['sdd'] / geometry['sod']
+                if geometry["sod"] and geometry["sdd"]:
+                    geometry["magnification"] = geometry["sdd"] / geometry["sod"]
                     # Cone beam half-angle in degrees
                     import math
-                    geometry['cone_angle'] = math.degrees(math.atan2(
-                        geometry.get('pixel_size', 0.1) * 500,  # Approximate detector half-width
-                        geometry['sdd']
-                    ))
 
-                print(f"CT Geometry: Voxel={geometry.get('voxel_size', 'N/A')} mm, "
-                      f"SOD={geometry.get('sod', 'N/A')} mm, SDD={geometry.get('sdd', 'N/A')} mm, "
-                      f"Mag={geometry.get('magnification', 'N/A'):.2f}x")
+                    geometry["cone_angle"] = math.degrees(
+                        math.atan2(
+                            geometry.get("pixel_size", 0.1)
+                            * 500,  # Approximate detector half-width
+                            geometry["sdd"],
+                        )
+                    )
+
+                print(
+                    f"CT Geometry: Voxel={geometry.get('voxel_size', 'N/A')} mm, "
+                    f"SOD={geometry.get('sod', 'N/A')} mm, SDD={geometry.get('sdd', 'N/A')} mm, "
+                    f"Mag={geometry.get('magnification', 'N/A'):.2f}x"
+                )
 
             # Also grab scanner info if available
-            if 'Scan info' in config:
-                geometry['scanner_type'] = config['Scan info'].get('scanner type', '').strip('"')
-                geometry['scan_id'] = config['Scan info'].get('scanID', '').strip('"')
+            if "Scan info" in config:
+                geometry["scanner_type"] = (
+                    config["Scan info"].get("scanner type", "").strip('"')
+                )
+                geometry["scan_id"] = config["Scan info"].get("scanID", "").strip('"')
 
-            if 'Tube settings' in config:
-                tube = config['Tube settings']
-                geometry['kv'] = tube.get('kV actual value', '').strip('"')
-                geometry['power'] = tube.get('Target power actual value', '').strip('"')
+            if "Tube settings" in config:
+                tube = config["Tube settings"]
+                geometry["kv"] = tube.get("kV actual value", "").strip('"')
+                geometry["power"] = tube.get("Target power actual value", "").strip('"')
 
             self.geometry = geometry
             return geometry
@@ -613,5 +718,6 @@ class VolumeLoader:
         except Exception as e:
             print(f"Error parsing XRE settings: {e}")
             import traceback
+
             traceback.print_exc()
             return None

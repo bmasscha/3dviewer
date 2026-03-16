@@ -1,5 +1,6 @@
-from PyQt6.QtWidgets import QApplication, QLabel
 import sys
+
+from PyQt6.QtWidgets import QApplication, QLabel
 
 try:
     app = QApplication(sys.argv)

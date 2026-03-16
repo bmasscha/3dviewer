@@ -1,14 +1,16 @@
-import os
-import sys
 import logging
-import numpy as np
+import os
+
 import glm
-from volume_loader import VolumeLoader
-from renderer import VolumeRenderer, ShaderProgram
-from camera import Camera
-import transfer_functions
-from command_interpreter import CommandInterpreter
+import numpy as np
+
 import filters
+import transfer_functions
+from camera import Camera
+from command_interpreter import CommandInterpreter
+from renderer import ShaderProgram, VolumeRenderer
+from volume_loader import VolumeLoader
+
 
 class AppCore:
     def __init__(self):
@@ -17,37 +19,39 @@ class AppCore:
         self.camera = Camera(target=(0.5, 0.5, 0.5))
         self.command_interpreter = CommandInterpreter()
         self.current_dataset_path = None
-        
-        self.slice_indices = [0, 0, 0] # X, Y, Z
+
+        self.slice_indices = [0, 0, 0]  # X, Y, Z
         self.slice_density = 0.25
         self.slice_threshold = 0.06
-        
+
         # Primary Volume
         self.volume_density = 50.0
         self.volume_threshold = 0.05
         self.tf_slope = 1.0
         self.tf_offset = 0.0
         self.current_tf_name = "grayscale"
-        self.alpha_points = [(0.0, 0.0), (1.0, 1.0)] # Default linear ramp
-        
+        self.alpha_points = [(0.0, 0.0), (1.0, 1.0)]  # Default linear ramp
+
         # Secondary (Overlay) Volume
         self.has_overlay = False
         self.overlay_density = 50.0
         self.overlay_threshold = 0.05
         self.overlay_tf_slope = 1.0
         self.overlay_tf_offset = 0.0
-        self.overlay_tf_name = "plasma" # Default overlay TF
+        self.overlay_tf_name = "plasma"  # Default overlay TF
         self.overlay_alpha_points = [(0.0, 0.0), (1.0, 1.0)]
         self.overlay_offset = glm.vec3(0.0, 0.0, 0.0)
         self.overlay_scale = 1.0
 
         # Multi-channel support for spectral CT
         self.is_multichannel = False  # True if loaded data has multiple channels
-        self.num_channels = 0         # Number of available energy channels
-        self.channel_data = []        # List of 3D numpy arrays (one per channel)
-        self.primary_channel_index = 0    # Currently displayed in slot 0
-        self.overlay_channel_index = 1    # Currently displayed in slot 1 (if overlay enabled)
-        self.channel_names = []       # Optional: ["Channel 0", "Channel 1", ...] for labeling
+        self.num_channels = 0  # Number of available energy channels
+        self.channel_data = []  # List of 3D numpy arrays (one per channel)
+        self.primary_channel_index = 0  # Currently displayed in slot 0
+        self.overlay_channel_index = (
+            1  # Currently displayed in slot 1 (if overlay enabled)
+        )
+        self.channel_names = []  # Optional: ["Channel 0", "Channel 1", ...] for labeling
 
         self.light_intensity = 1.0
         self.ambient_light = 0.15
@@ -55,25 +59,57 @@ class AppCore:
         self.specular_intensity = 0.5
         self.shininess = 32.0
         self.gradient_weight = 10.0
-        self.sampling_rate = 1.0 # Multiplier for quality
-        self.lighting_mode = 0 # 0: Fixed, 1: Headlamp
+        self.sampling_rate = 1.0  # Multiplier for quality
+        self.lighting_mode = 0  # 0: Fixed, 1: Headlamp
         self.lighting_modes = ["Fixed", "Headlamp"]
 
         # Virtual Phase Contrast (Post-Processing)
         self.vpc_enabled = False
-        self.vpc_distance = 50.0 # Virtual propagation distance
-        self.vpc_wavelength = 1.0 # Virtual wavelength factor
+        self.vpc_distance = 50.0  # Virtual propagation distance
+        self.vpc_wavelength = 1.0  # Virtual wavelength factor
 
-        
-        self.tf_names = ["grayscale", "viridis", "plasma", "medical", "legacy_rainbow", 
-                         "ct_bone", "ct_soft_tissue", "ct_muscle", "ct_lung", 
-                         "legacy_cool_warm", "ct_sandstone", "ct_body",
-                         "cet_fire", "cet_rainbow", "cet_coolwarm", "cet_bkr", "cet_bky", "cet_glasbey", "cet_glasbey_dark",
-                         "cet_bgyw", "cet_bmy", "cet_kgy", "cet_gray", "cet_cwr", "cet_linear_kry_5_95_c72", "cet_blues", "cet_isolum"]
-        self.rendering_mode = 0 # 0: MIP, 1: Standard, 2: Cinematic, 3: MIDA, 4: Shaded, 5: Edge
+        self.tf_names = [
+            "grayscale",
+            "viridis",
+            "plasma",
+            "medical",
+            "legacy_rainbow",
+            "ct_bone",
+            "ct_soft_tissue",
+            "ct_muscle",
+            "ct_lung",
+            "legacy_cool_warm",
+            "ct_sandstone",
+            "ct_body",
+            "cet_fire",
+            "cet_rainbow",
+            "cet_coolwarm",
+            "cet_bkr",
+            "cet_bky",
+            "cet_glasbey",
+            "cet_glasbey_dark",
+            "cet_bgyw",
+            "cet_bmy",
+            "cet_kgy",
+            "cet_gray",
+            "cet_cwr",
+            "cet_linear_kry_5_95_c72",
+            "cet_blues",
+            "cet_isolum",
+        ]
+        self.rendering_mode = (
+            0  # 0: MIP, 1: Standard, 2: Cinematic, 3: MIDA, 4: Shaded, 5: Edge
+        )
         self.overlay_rendering_mode = 0
-        self.render_modes = ["MIP", "Volume Rendering", "Cinematic Rendering", "MIDA Rendering", "Shaded Volume", "Edge Enhanced"]
-        
+        self.render_modes = [
+            "MIP",
+            "Volume Rendering",
+            "Cinematic Rendering",
+            "MIDA Rendering",
+            "Shaded Volume",
+            "Edge Enhanced",
+        ]
+
         self.clip_min = glm.vec3(0.0, 0.0, 0.0)
         self.clip_max = glm.vec3(1.0, 1.0, 1.0)
         self.overlay_clip_min = glm.vec3(0.0, 0.0, 0.0)
@@ -85,13 +121,13 @@ class AppCore:
 
         # CT Geometry (from XRE settings file)
         self.geometry = {
-            'voxel_size': None,  # mm
-            'pixel_size': None,  # mm (detector)
-            'sod': None,         # Source-Object Distance (mm)
-            'sdd': None,         # Source-Detector Distance (mm)
-            'magnification': None,
-            'cone_angle': None,
-            'scanner_type': None,
+            "voxel_size": None,  # mm
+            "pixel_size": None,  # mm (detector)
+            "sod": None,  # Source-Object Distance (mm)
+            "sdd": None,  # Source-Detector Distance (mm)
+            "magnification": None,
+            "cone_angle": None,
+            "scanner_type": None,
         }
         self.show_scale_bar = True  # Toggle for scale bar visibility
 
@@ -113,41 +149,50 @@ class AppCore:
             "slices": {
                 "x": self.slice_indices[0],
                 "y": self.slice_indices[1],
-                "z": self.slice_indices[2]
+                "z": self.slice_indices[2],
             },
             "vpc_enabled": self.vpc_enabled,
-            "has_overlay": self.has_overlay
+            "has_overlay": self.has_overlay,
         }
 
     def load_shaders(self):
         try:
             path = os.path.dirname(__file__)
-            slice_vert = open(os.path.join(path, 'shaders/slice.vert')).read()
-            slice_frag = open(os.path.join(path, 'shaders/slice.frag')).read()
-            ray_vert = open(os.path.join(path, 'shaders/raymarch.vert')).read()
-            ray_frag = open(os.path.join(path, 'shaders/raymarch.frag')).read()
-            
+            slice_vert = open(os.path.join(path, "shaders/slice.vert")).read()
+            slice_frag = open(os.path.join(path, "shaders/slice.frag")).read()
+            ray_vert = open(os.path.join(path, "shaders/raymarch.vert")).read()
+            ray_frag = open(os.path.join(path, "shaders/raymarch.frag")).read()
+
             self.slice_shader = ShaderProgram(slice_vert, slice_frag)
             self.ray_shader = ShaderProgram(ray_vert, ray_frag)
-            
+
             # Load VPC Filter Shader (uses same vertex shader as slice/quad)
-            vpc_frag = open(os.path.join(path, 'shaders/vpc_filter.frag')).read()
+            vpc_frag = open(os.path.join(path, "shaders/vpc_filter.frag")).read()
             self.vpc_shader = ShaderProgram(slice_vert, vpc_frag)
-            
+
             return True
         except Exception as e:
             print(f"Failed to load shaders: {e}")
             return False
 
-    def load_dataset(self, folder_path, is_overlay=False, rescale_range=None, z_range=None, binning_factor=1, use_8bit=False, progress_callback=None):
+    def load_dataset(
+        self,
+        folder_path,
+        is_overlay=False,
+        rescale_range=None,
+        z_range=None,
+        binning_factor=1,
+        use_8bit=False,
+        progress_callback=None,
+    ):
         if os.path.exists(folder_path):
             data = self.volume_loader.load_from_folder(
-                folder_path, 
+                folder_path,
                 rescale_range=rescale_range,
                 z_range=z_range,
                 binning_factor=binning_factor,
                 use_8bit=use_8bit,
-                progress_callback=progress_callback
+                progress_callback=progress_callback,
             )
             if data is not None:
                 return self.finalize_volume_load(data, folder_path, is_overlay)
@@ -155,7 +200,9 @@ class AppCore:
             print(f"AppCore Error: Path not found: '{folder_path}'")
         return False
 
-    def finalize_volume_load(self, data, path, is_overlay=False, is_multichannel=False, channel_list=None):
+    def finalize_volume_load(
+        self, data, path, is_overlay=False, is_multichannel=False, channel_list=None
+    ):
         """
         Performs post-loading initialization: GPU upload, state update, camera reset.
 
@@ -190,16 +237,18 @@ class AppCore:
 
         if not is_overlay:
             self.current_dataset_path = path
-            self.current_volume_data = data # Store for CPU processing
-            self.slice_indices = [w//2, h//2, d//2]
+            self.current_volume_data = data  # Store for CPU processing
+            self.slice_indices = [w // 2, h // 2, d // 2]
 
             # Copy geometry from loader if available
             if self.volume_loader.geometry:
                 self.geometry = self.volume_loader.geometry.copy()
-                print(f"Geometry loaded: voxel_size={self.geometry.get('voxel_size')} mm")
+                print(
+                    f"Geometry loaded: voxel_size={self.geometry.get('voxel_size')} mm"
+                )
 
                 # Adjust camera FOV based on cone-beam geometry if available
-                if self.geometry.get('sod') and self.geometry.get('sdd'):
+                if self.geometry.get("sod") and self.geometry.get("sdd"):
                     self._apply_cone_beam_fov()
 
             # Update camera target to center of volume
@@ -211,7 +260,7 @@ class AppCore:
             self.update_tf_texture(slot=0)
         else:
             self.has_overlay = True
-            self.overlay_volume_data = data # Store for CPU processing
+            self.overlay_volume_data = data  # Store for CPU processing
             self.update_tf_texture(slot=1)
             w2, h2, d2 = self.volume_renderer.volume_dims[1]
             w1, h1, d1 = self.volume_renderer.volume_dims[0]
@@ -221,7 +270,11 @@ class AppCore:
 
     def set_primary_channel(self, channel_index):
         """Switch which energy channel is displayed in primary slot (slot 0)."""
-        if not self.is_multichannel or channel_index >= self.num_channels or channel_index < 0:
+        if (
+            not self.is_multichannel
+            or channel_index >= self.num_channels
+            or channel_index < 0
+        ):
             return False
 
         self.primary_channel_index = channel_index
@@ -239,7 +292,11 @@ class AppCore:
 
     def set_overlay_channel(self, channel_index):
         """Switch which energy channel is displayed in overlay slot (slot 1)."""
-        if not self.is_multichannel or channel_index >= self.num_channels or channel_index < 0:
+        if (
+            not self.is_multichannel
+            or channel_index >= self.num_channels
+            or channel_index < 0
+        ):
             return False
 
         self.overlay_channel_index = channel_index
@@ -268,69 +325,97 @@ class AppCore:
             # Normal overlay disable
             self.has_overlay = False
 
-    def apply_filter(self, filter_name, progress_callback=None, check_cancel=None, **params):
+    def apply_filter(
+        self, filter_name, progress_callback=None, check_cancel=None, **params
+    ):
         """
         Applies a filter to the primary volume.
         """
-        if not hasattr(self, 'current_volume_data') or self.current_volume_data is None:
+        if not hasattr(self, "current_volume_data") or self.current_volume_data is None:
             return False, "No volume loaded."
-            
+
         try:
             # We operate on the float32 normalized data usually, but load_dataset returns what volume_loader returns.
             # volume_loader typically returns float32 normalized (0-1) or original data depending on implementation.
             # Assuming it's compatible with scipy.ndimage.
-            
-            logging.info(f"Filter Input Stats: Min={np.min(self.current_volume_data):.4f}, Max={np.max(self.current_volume_data):.4f}, Mean={np.mean(self.current_volume_data):.4f}, Shape={self.current_volume_data.shape}")
+
+            logging.info(
+                f"Filter Input Stats: Min={np.min(self.current_volume_data):.4f}, Max={np.max(self.current_volume_data):.4f}, Mean={np.mean(self.current_volume_data):.4f}, Shape={self.current_volume_data.shape}"
+            )
 
             filtered_data = None
             if filter_name == "Gaussian":
-                sigma = params.get('sigma', 1.0)
-                filtered_data = filters.apply_3d_gaussian(self.current_volume_data, sigma)
+                sigma = params.get("sigma", 1.0)
+                filtered_data = filters.apply_3d_gaussian(
+                    self.current_volume_data, sigma
+                )
             elif filter_name == "Median":
-                size = params.get('size', 3)
-                filtered_data = filters.apply_3d_median(self.current_volume_data, int(size))
+                size = params.get("size", 3)
+                filtered_data = filters.apply_3d_median(
+                    self.current_volume_data, int(size)
+                )
             elif filter_name == "Bilateral":
-                sigma_spatial = params.get('sigma_spatial', 1.0)
-                sigma_color = params.get('sigma_color', 0.05)
-                filtered_data = filters.apply_3d_bilateral(self.current_volume_data, sigma_spatial, sigma_color, progress_callback, check_cancel)
+                sigma_spatial = params.get("sigma_spatial", 1.0)
+                sigma_color = params.get("sigma_color", 0.05)
+                filtered_data = filters.apply_3d_bilateral(
+                    self.current_volume_data,
+                    sigma_spatial,
+                    sigma_color,
+                    progress_callback,
+                    check_cancel,
+                )
             elif filter_name == "NLM":
-                h = params.get('h', 1.15)
-                patch_size = params.get('patch_size', 5)
-                patch_distance = params.get('patch_distance', 6)
-                filtered_data = filters.apply_3d_nlm(self.current_volume_data, h, int(patch_size), int(patch_distance), progress_callback, check_cancel)
+                h = params.get("h", 1.15)
+                patch_size = params.get("patch_size", 5)
+                patch_distance = params.get("patch_distance", 6)
+                filtered_data = filters.apply_3d_nlm(
+                    self.current_volume_data,
+                    h,
+                    int(patch_size),
+                    int(patch_distance),
+                    progress_callback,
+                    check_cancel,
+                )
             elif filter_name == "Total Variation":
-                weight = params.get('weight', 0.1)
-                filtered_data = filters.apply_3d_tv(self.current_volume_data, weight, progress_callback, check_cancel)
+                weight = params.get("weight", 0.1)
+                filtered_data = filters.apply_3d_tv(
+                    self.current_volume_data, weight, progress_callback, check_cancel
+                )
             else:
                 return False, f"Unknown filter: {filter_name}"
-            
+
             # Check for cancellation (filtered_data is None)
             if filtered_data is None:
-                 return False, "Filter cancelled by user."
+                return False, "Filter cancelled by user."
 
             if filtered_data is not None:
-                logging.info(f"Filter Output Stats: Min={np.min(filtered_data):.4f}, Max={np.max(filtered_data):.4f}, Mean={np.mean(filtered_data):.4f}")
+                logging.info(
+                    f"Filter Output Stats: Min={np.min(filtered_data):.4f}, Max={np.max(filtered_data):.4f}, Mean={np.mean(filtered_data):.4f}"
+                )
                 self.current_volume_data = filtered_data
                 return True, f"Applied {filter_name} filter."
-            
+
         except Exception as e:
             return False, f"Filter error: {str(e)}"
-            
+
         return False, "Filter app failed."
 
     def update_render_texture(self):
         """Updates the OpenGL texture from the current volume data. Must be called from the main thread."""
         if self.current_volume_data is not None:
             d, h, w = self.current_volume_data.shape
-            self.volume_renderer.create_texture(self.current_volume_data, w, h, d, slot=0)
+            self.volume_renderer.create_texture(
+                self.current_volume_data, w, h, d, slot=0
+            )
             return True
         return False
 
     def get_box_size(self, slot=0):
         w, h, d = self.volume_renderer.volume_dims[slot]
-        if w == 0: return glm.vec3(1.0)
+        if w == 0:
+            return glm.vec3(1.0)
         max_dim = max(w, h, d)
-        return glm.vec3(w/max_dim, h/max_dim, d/max_dim)
+        return glm.vec3(w / max_dim, h / max_dim, d / max_dim)
 
     def _apply_cone_beam_fov(self):
         """
@@ -338,9 +423,10 @@ class AppCore:
         Uses SOD/SDD to determine the cone angle that matches the scan geometry.
         """
         import math
-        sod = self.geometry.get('sod')
-        sdd = self.geometry.get('sdd')
-        pixel_size = self.geometry.get('pixel_size', 0.1)  # mm
+
+        sod = self.geometry.get("sod")
+        sdd = self.geometry.get("sdd")
+        pixel_size = self.geometry.get("pixel_size", 0.1)  # mm
 
         if not sod or not sdd:
             return
@@ -351,7 +437,7 @@ class AppCore:
 
         # Detector half-width in mm (using pixel size and image width)
         # The voxel count * voxel_size gives object size, multiply by mag for detector size
-        voxel_size = self.geometry.get('voxel_size', pixel_size / mag)
+        voxel_size = self.geometry.get("voxel_size", pixel_size / mag)
         object_width = max(w, h) * voxel_size  # Object size in mm
         detector_half_width = object_width * mag / 2.0
 
@@ -364,18 +450,20 @@ class AppCore:
         suggested_fov = min(60.0, max(20.0, cone_half_angle * 2.0))
 
         print(f"Cone-beam geometry: SOD={sod:.1f}mm, SDD={sdd:.1f}mm, Mag={mag:.2f}x")
-        print(f"Calculated cone half-angle: {cone_half_angle:.1f}°, Suggested FOV: {suggested_fov:.1f}°")
+        print(
+            f"Calculated cone half-angle: {cone_half_angle:.1f}°, Suggested FOV: {suggested_fov:.1f}°"
+        )
 
         # Apply the FOV
         self.camera.fov = suggested_fov
-        self.geometry['cone_angle'] = cone_half_angle * 2.0
+        self.geometry["cone_angle"] = cone_half_angle * 2.0
 
     def get_physical_dimensions(self):
         """
         Returns the physical dimensions of the volume in mm (if geometry is available).
         Returns (width_mm, height_mm, depth_mm) or None if no geometry.
         """
-        voxel_size = self.geometry.get('voxel_size')
+        voxel_size = self.geometry.get("voxel_size")
         if not voxel_size:
             return None
 
@@ -406,13 +494,12 @@ class AppCore:
         else:
             name = self.overlay_tf_name
             points = self.overlay_alpha_points
-            
+
         tf_data = transfer_functions.get_combined_tf(name, points)
-        
+
         # Check if categorical for sharp rendering
         is_cat = transfer_functions.is_categorical(name)
         self.volume_renderer.create_tf_texture(tf_data, slot=slot, categorical=is_cat)
-
 
     def execute_command_text(self, text):
         """
@@ -420,96 +507,110 @@ class AppCore:
         Returns (success: bool, response_message: str)
         """
         action_dict, response_msg = self.command_interpreter.interpret(text)
-        
+
         if not action_dict:
             return False, response_msg or "I'm not sure how to do that yet."
-        
-        action = action_dict.get('action')
-        params = action_dict.get('params', {})
-        
+
+        action = action_dict.get("action")
+        params = action_dict.get("params", {})
+
         # Smarter overlay detection: check if keywords are standalone words, usually at the start
         import re
-        is_overlay_cmd = bool(re.search(r'\b(overlay|secondary)\b', text.lower()))
-        
-        if action == 'zoom':
-            val = float(params.get('value', 0))
+
+        is_overlay_cmd = bool(re.search(r"\b(overlay|secondary)\b", text.lower()))
+
+        if action == "zoom":
+            val = float(params.get("value", 0))
             self.camera.process_scroll(val * 5.0)
             return True, response_msg
-            
-        elif action == 'rotate':
-            axis = params.get('axis')
-            val = float(params.get('value', 0))
-            drag_amount = (val / 180.0)
-            if axis == 'y':
+
+        elif action == "rotate":
+            axis = params.get("axis")
+            val = float(params.get("value", 0))
+            drag_amount = val / 180.0
+            if axis == "y":
                 self.camera.rotate(0, 0, -drag_amount, 0)
-            elif axis == 'x':
+            elif axis == "x":
                 self.camera.rotate(0, 0, 0, -drag_amount)
             return True, response_msg
-                
-        elif action == 'reset':
+
+        elif action == "reset":
             self.camera.radius = 3.0
             self.camera.target = self.get_box_size() * 0.5
             self.camera.orientation = glm.quat()
             self.camera.update_camera_vectors()
             return True, response_msg
-        
-        elif action == 'set_mode':
-            mode_map = {'mip': 0, 'volume': 1, 'cinematic': 2, 'mida': 3, 'shaded': 4, 'edge': 5}
-            mode_name = params.get('mode', '').lower()
+
+        elif action == "set_mode":
+            mode_map = {
+                "mip": 0,
+                "volume": 1,
+                "cinematic": 2,
+                "mida": 3,
+                "shaded": 4,
+                "edge": 5,
+            }
+            mode_name = params.get("mode", "").lower()
             if mode_name in mode_map:
                 slot = 1 if is_overlay_cmd else 0
                 self.set_rendering_mode(mode_map[mode_name], slot=slot)
                 target = "Overlay" if slot == 1 else "Primary"
-                return True, response_msg or f"{target} switched to {mode_name.upper()} mode."
+                return (
+                    True,
+                    response_msg or f"{target} switched to {mode_name.upper()} mode.",
+                )
             return False, f"Unknown rendering mode: {mode_name}"
-        
-        elif action == 'set_tf':
-            tf_name = params.get('tf', '').lower()
+
+        elif action == "set_tf":
+            tf_name = params.get("tf", "").lower()
             if tf_name in self.tf_names:
                 slot = 1 if is_overlay_cmd else 0
                 self.set_transfer_function(tf_name, slot=slot)
                 target = "Overlay" if slot == 1 else "Primary"
-                return True, response_msg or f"{target} transfer function set to {tf_name}."
+                return (
+                    True,
+                    response_msg or f"{target} transfer function set to {tf_name}.",
+                )
             return False, f"Unknown transfer function: {tf_name}"
-        
-        elif action == 'set_slice':
-            axis = params.get('axis', '').lower()
-            axis_map = {'x': 0, 'y': 1, 'z': 2}
+
+        elif action == "set_slice":
+            axis = params.get("axis", "").lower()
+            axis_map = {"x": 0, "y": 1, "z": 2}
             if axis not in axis_map:
                 return False, "Invalid slice axis. Use x, y, or z."
-            
+
             axis_idx = axis_map[axis]
             vol_dims = self.volume_renderer.volume_dims[0]
-            
-            if 'percent' in params:
-                percent = float(params['percent'])
+
+            if "percent" in params:
+                percent = float(params["percent"])
                 value = int((percent / 100.0) * (vol_dims[axis_idx] - 1))
             else:
-                value = int(params.get('value', 0))
-            
+                value = int(params.get("value", 0))
+
             value = max(0, min(value, vol_dims[axis_idx] - 1))
             self.slice_indices[axis_idx] = value
             return True, response_msg or f"{axis.upper()} slice set to {value}."
-        
-        elif action == 'set_lighting':
-            mode_name = params.get('mode', '').lower()
-            mode_map = {'fixed': 0, 'headlamp': 1}
+
+        elif action == "set_lighting":
+            mode_name = params.get("mode", "").lower()
+            mode_map = {"fixed": 0, "headlamp": 1}
             if mode_name in mode_map:
                 self.lighting_mode = mode_map[mode_name]
                 return True, response_msg or f"Lighting set to {mode_name}."
             return False, f"Unknown lighting mode: {mode_name}"
-        
-        elif action == 'adjust_quality' or action == 'set_quality':
-            value = float(params.get('value', 1.0))
+
+        elif action == "adjust_quality" or action == "set_quality":
+            value = float(params.get("value", 1.0))
             self.sampling_rate = max(0.1, min(value, 5.0))
             return True, response_msg or f"Quality set to {value}x."
-            
-        elif action == 'set_threshold':
-            value = float(params.get('value', 0.05))
+
+        elif action == "set_threshold":
+            value = float(params.get("value", 0.05))
             # Auto-scale: If user says "set threshold 10", they likely mean 0.1
             if value > 1.0:
                 value /= 100.0
-            
+
             if is_overlay_cmd:
                 self.overlay_threshold = value
                 return True, f"Overlay threshold set to {value:.2f} (Range: 0.0 to 1.0)"
@@ -517,97 +618,127 @@ class AppCore:
                 self.volume_threshold = value
                 return True, f"Primary threshold set to {value:.2f} (Range: 0.0 to 1.0)"
 
-        elif action == 'set_density':
-            value = float(params.get('value', 50.0))
+        elif action == "set_density":
+            value = float(params.get("value", 50.0))
             # No auto-scale for density as it can be large, but clamped
             value = max(0.1, min(value, 500.0))
-            
+
             if is_overlay_cmd:
                 self.overlay_density = value
-                return True, f"Overlay density set to {value:.1f} (Recommended range: 10 to 100)"
+                return (
+                    True,
+                    f"Overlay density set to {value:.1f} (Recommended range: 10 to 100)",
+                )
             else:
                 self.volume_density = value
-                return True, f"Primary density set to {value:.1f} (Recommended range: 10 to 100)"
+                return (
+                    True,
+                    f"Primary density set to {value:.1f} (Recommended range: 10 to 100)",
+                )
 
-        elif action == 'set_specular':
-            value = float(params.get('value', 0.5))
+        elif action == "set_specular":
+            value = float(params.get("value", 0.5))
             self.specular_intensity = max(0.0, min(value, 2.0))
-            return True, response_msg or f"Specular intensity set to {self.specular_intensity:.2f}"
+            return (
+                True,
+                response_msg
+                or f"Specular intensity set to {self.specular_intensity:.2f}",
+            )
 
-        elif action == 'set_shininess':
-            value = float(params.get('value', 32.0))
+        elif action == "set_shininess":
+            value = float(params.get("value", 32.0))
             self.shininess = max(1.0, min(value, 128.0))
             return True, response_msg or f"Shininess set to {self.shininess:.1f}"
 
-        elif action == 'set_gradient_weight':
-            value = float(params.get('value', 0.0))
+        elif action == "set_gradient_weight":
+            value = float(params.get("value", 0.0))
             self.gradient_weight = max(0.0, min(value, 50.0))
-            return True, response_msg or f"Gradient weight (Edge Enhancement) set to {self.gradient_weight:.1f}"
+            return (
+                True,
+                response_msg
+                or f"Gradient weight (Edge Enhancement) set to {self.gradient_weight:.1f}",
+            )
 
-        elif action == 'set_fov':
-            value = float(params.get('value', 45.0))
+        elif action == "set_fov":
+            value = float(params.get("value", 45.0))
             self.camera.fov = max(1.0, min(value, 160.0))
-            return True, response_msg or f"Field of View set to {self.camera.fov:.1f} degrees"
-            
-        elif action == 'load':
-            path = params.get('path')
+            return (
+                True,
+                response_msg or f"Field of View set to {self.camera.fov:.1f} degrees",
+            )
+
+        elif action == "load":
+            path = params.get("path")
             if not path:
                 return False, "Please specify a folder path to load."
-            
+
             success = self.load_dataset(path, is_overlay=is_overlay_cmd)
             if success:
                 target = "Overlay" if is_overlay_cmd else "Primary"
                 return True, f"Successfully loaded {target} from {path}"
             return False, f"Failed to load dataset from {path}"
 
-        elif action == 'crop':
-            axis = params.get('axis', 'x').lower()
-            c_min = float(params.get('min', 0.0))
-            c_max = float(params.get('max', 1.0))
-            
+        elif action == "crop":
+            axis = params.get("axis", "x").lower()
+            c_min = float(params.get("min", 0.0))
+            c_max = float(params.get("max", 1.0))
+
             target = "Overlay" if is_overlay_cmd else "Primary"
             if is_overlay_cmd:
-                if axis == 'x': self.overlay_clip_min.x, self.overlay_clip_max.x = c_min, c_max
-                elif axis == 'y': self.overlay_clip_min.y, self.overlay_clip_max.y = c_min, c_max
-                elif axis == 'z': self.overlay_clip_min.z, self.overlay_clip_max.z = c_min, c_max
+                if axis == "x":
+                    self.overlay_clip_min.x, self.overlay_clip_max.x = c_min, c_max
+                elif axis == "y":
+                    self.overlay_clip_min.y, self.overlay_clip_max.y = c_min, c_max
+                elif axis == "z":
+                    self.overlay_clip_min.z, self.overlay_clip_max.z = c_min, c_max
             else:
-                if axis == 'x': self.clip_min.x, self.clip_max.x = c_min, c_max
-                elif axis == 'y': self.clip_min.y, self.clip_max.y = c_min, c_max
-                elif axis == 'z': self.clip_min.z, self.clip_max.z = c_min, c_max
-            
-            return True, f"{target} crop {axis.upper()} set to [{c_min:.2f}, {c_max:.2f}]"
+                if axis == "x":
+                    self.clip_min.x, self.clip_max.x = c_min, c_max
+                elif axis == "y":
+                    self.clip_min.y, self.clip_max.y = c_min, c_max
+                elif axis == "z":
+                    self.clip_min.z, self.clip_max.z = c_min, c_max
 
-        elif action == 'set_offset' and is_overlay_cmd:
+            return (
+                True,
+                f"{target} crop {axis.upper()} set to [{c_min:.2f}, {c_max:.2f}]",
+            )
+
+        elif action == "set_offset" and is_overlay_cmd:
             nums = re.findall(r"[-+]?\d*\.\d+|\d+", text)
             if nums:
                 val = float(nums[0])
                 text_lower = text.lower()
-                if re.search(r'\bx\b', text_lower): self.overlay_offset.x = val
-                elif re.search(r'\by\b', text_lower): self.overlay_offset.y = val
-                elif re.search(r'\bz\b', text_lower): self.overlay_offset.z = val
+                if re.search(r"\bx\b", text_lower):
+                    self.overlay_offset.x = val
+                elif re.search(r"\by\b", text_lower):
+                    self.overlay_offset.y = val
+                elif re.search(r"\bz\b", text_lower):
+                    self.overlay_offset.z = val
                 return True, f"Overlay offset set to {self.overlay_offset}"
-                
-        elif action == 'set_scale' and is_overlay_cmd:
+
+        elif action == "set_scale" and is_overlay_cmd:
             nums = re.findall(r"[-+]?\d*\.\d+|\d+", text)
             if nums:
                 self.overlay_scale = float(nums[0])
                 return True, f"Overlay scale set to {self.overlay_scale}"
-                
-        elif action == 'fit_overlay' and is_overlay_cmd:
+
+        elif action == "fit_overlay" and is_overlay_cmd:
             # Scale overlay to match physical size of primary along Z
             size1 = self.get_box_size(0)
             size2 = self.get_box_size(1)
             if size2.z > 0:
                 self.overlay_scale = size1.z / size2.z
                 self.overlay_offset = glm.vec3(0.0)
-                return True, f"Overlay scaled by {self.overlay_scale:.2f} to fit Primary Z."
+                return (
+                    True,
+                    f"Overlay scaled by {self.overlay_scale:.2f} to fit Primary Z.",
+                )
             return False, "Could not determine overlay size for fitting."
 
-        elif action == 'center_overlay' and is_overlay_cmd:
-             # Just a simple center for now
-             self.overlay_offset = glm.vec3(0.0, 0.0, 0.4)
-             return True, "Overlay offset moved to center (approx)."
+        elif action == "center_overlay" and is_overlay_cmd:
+            # Just a simple center for now
+            self.overlay_offset = glm.vec3(0.0, 0.0, 0.4)
+            return True, "Overlay offset moved to center (approx)."
 
         return False, f"Action '{action}' implemented but not handled in core."
-
-from camera import Camera # Import at bottom to avoid potential circular if any

@@ -1,5 +1,6 @@
-from command_interpreter import CommandInterpreter
 import logging
+
+from command_interpreter import CommandInterpreter
 
 logging.basicConfig(level=logging.INFO)
 ci = CommandInterpreter()

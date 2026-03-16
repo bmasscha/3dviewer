@@ -1,5 +1,5 @@
 import urllib.request
-import json
+
 
 def test_conn(url):
     print(f"Testing {url}...")
@@ -14,11 +14,12 @@ def test_conn(url):
         print(f"  FAILED: {e}")
         return False
 
+
 print("Ollama Connection Diagnostics")
 urls = [
     "http://localhost:11434/api/tags",
     "http://127.0.0.1:11434/api/tags",
-    "http://[::1]:11434/api/tags"
+    "http://[::1]:11434/api/tags",
 ]
 
 for u in urls:
