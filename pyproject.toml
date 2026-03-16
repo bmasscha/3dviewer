@@ -1,0 +1,58 @@
+[project]
+name = "antigravity-3dviewer"
+version = "0.1.0"
+description = "3D Volume Viewer for CT/X-ray reconstruction data"
+requires-python = ">=3.11"
+dependencies = [
+    "acquila-zmq",
+    "colorcet==3.1.0",
+    "glfw==2.10.0",
+    "h5py==3.15.1",
+    "imageio==2.37.2",
+    "imageio-ffmpeg==0.6.0",
+    "numpy==2.4.0",
+    "pillow==12.0.0",
+    "psutil==7.2.1",
+    "pyglm==2.8.3",
+    "pyopengl==3.1.10",
+    "pyqt6==6.10.1",
+    "pyzmq==27.1.0",
+    "scikit-image==0.26.0",
+    "scipy==1.17.0",
+    "tifffile==2025.12.20",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+acquila-zmq = { workspace = true }
+
+[tool.uv.workspace]
+members = ["src/acquila_zmq"]
+
+[tool.ruff]
+# Target Python version
+target-version = "py311"
+
+# Set the maximum line length (standard is 88, like Black)
+line-length = 88
+
+[tool.ruff.lint]
+# Enable specific rulesets
+# E/W: Error/Warning (Pycodestyle)
+# F: Pyflakes
+# I: isort (Import sorting)
+# B: flake8-bugbear (Common bugs)
+# UP: pyupgrade (Modernize syntax)
+select = ["E", "W", "F", "I", "B", "UP"]
+
+# Ignore specific rules if they are too annoying
+ignore = []
+
+[tool.ruff.format]
+# Use double quotes, like Black
+quote-style = "double"
+
+# Indent with spaces
+indent-style = "space"

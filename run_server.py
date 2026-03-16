@@ -7,9 +7,16 @@ Usage:
 
 The server routes messages between clients (script_runner, 3dviewer, etc.)
 """
+import os
+import sys
+
+# Ensure src folder is in the path for in-tree imports
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+
 from acquila_zmq import AcquilaServer
 import signal
 import sys
+import argparse
 
 
 def main():

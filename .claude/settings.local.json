@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(git checkout:*)",
-      "Bash(.venv/Scripts/python.exe:*)"
+      "Bash(.venv/Scripts/python.exe:*)",
+      "Bash(.venv/Scripts/uv sync:*)",
+      "Bash(uv sync:*)"
     ]
   }
 }

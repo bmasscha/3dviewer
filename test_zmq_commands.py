@@ -6,6 +6,12 @@ Prerequisites:
 1. The ZMQ server must be running: python run_server.py
 2. The 3D Viewer must be running: cd src && python qt_main.py
 """
+import os
+import sys
+
+# Ensure src folder is in the path for in-tree imports
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+
 from acquila_zmq import AcquilaClient
 import time
 

@@ -16,7 +16,7 @@ This is a scientific volume viewer designed for viewing CT scan reconstructions.
 
 ## Tech Stack
 
-- **Python 3.x** with virtual environment in `.venv/`
+- **Python 3.11+** with virtual environment in `.venv/` (managed via `uv`)
 - **PyQt6** - GUI framework
 - **PyOpenGL** - OpenGL bindings for volume rendering
 - **NumPy** - Array operations
@@ -52,6 +52,18 @@ src/
 ```
 
 ## Running the Application
+
+Using `uv` (recommended):
+
+```bash
+# Run the viewer directly (automatically uses .venv)
+uv run src/3dviewer_gui.py
+
+# Install dependencies
+uv pip install -r requirements.txt
+```
+
+Using standard `pip`:
 
 ```bash
 # Activate virtual environment

@@ -52,7 +52,7 @@ python src/qt_main.py
 
 The ZMQ client will automatically start when the application launches. You should see:
 
-```
+```text
 INFO - ZMQ client started - ready to receive commands
 ```
 
@@ -73,7 +73,7 @@ client.send_command(
 ### Command Reference
 
 | Command | arg1 | arg2 | Description |
-|---------|------|------|-------------|
+| :------- | :--- | :--- | :----------- |
 | `load_data` | path | - | Load dataset from folder |
 | `set_rendering_mode` | mode (mip/volume/cinematic/mida/shaded/edge) | slot (0/1) | Set rendering mode |
 | `set_transfer_function` | tf_name | slot (0/1) | Set transfer function |
@@ -161,7 +161,7 @@ When commands are received via ZMQ:
 
 Example log output:
 
-```
+```text
 ZMQ: load_data
 Result: Successfully loaded dataset from: /path/to/data
 ```
@@ -174,7 +174,8 @@ Result: Successfully loaded dataset from: /path/to/data
 
 **Solutions**:
 
-- Verify `acquila_zmq` is installed: `pip show acquila_zmq`
+- The `acquila_zmq` library is now included in the project source (`src/acquila_zmq/`) and does not need to be installed via pip.
+- Ensure the `src` folder is in your Python path if running scripts from the root.
 - Check that ZMQ server is running
 - Review console for error messages
 
